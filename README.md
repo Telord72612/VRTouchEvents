@@ -49,12 +49,15 @@ There is multiple stage to choking:
 -at 15 sec: NPC will ragdoll and become uncounsious. Choking noise will stop. The "SendAssaultAlarm()" will be removed if you didn't get detected while choking. The NPC being choked will stop being hotile.  
 -at 25 sec: the NPC, if still being choked, will die if they are not protected/essential  
 
-Choking an NPC is considered an aggression. I'm sure there is NPC that will enjoy having it according to their bio/personality, but if you release before 7 second, it will be fine, no hostility/assault will be triggered. And if they passout, all the hostility/alarms get removed if no one else seen you. At a minimun of relationship 2 with that NPC, they the assault alarm won't triggers, as it's a "serious" fight between friend. 
+Choking an NPC is considered an aggression. I'm sure there is NPC that will enjoy having it according to their bio/personality, but if you release before 7 second, it will be fine, no hostility/assault will be triggered. And if they passout, all the hostility/alarms get removed if no one else seen you. At a minimun of relationship 2 with that NPC, the assault alarm won't triggers, as it's a "serious" fight between friend. 
 Choking an NPC while sneaking won't triggers an Assault Alarm **if you are not being detected during the choke**. This exclude the person being choked, they are not one of the person that can detect you. Let me know if that feature need work, i didn't tested it much.
 
 Any NPC choked will be so between 2 to 4 ingame hour, with a penality of 50% health and no regen while passout. They can be made to regain consciousness with a healing spell or a potion. 
 
 There is a total of 10 tracked slot for passout NPC. If you remove the mod while passout NPC are around, they may not come back, or get their regen back, so be mindful of that.
+
+
+**DO NOT** remove the mod while NPC are passed out from choking. It's a quest event that track their state. They will get stuck in that state if you remove the quest while NPC are out cold
 
 **DISCLAIMER**: This is Vibe coded with Opus 4.7. For real, Claude Code is fucking magical. I understand how the mod work and it's mechanic, but i didn't do the Code, it's was all done by Opus 4.7, so i'm not sure how safe this is. I'm playing with it, and my mod list is super heavy, 2000mod with physic, AI, fur shaders, the full CS suit, and i didn't had any issue. If there is any bug, let me know and i'll see what i can do. If any the real dev out there tell me that this mod is dangerous, i'll pull it down. 
 
