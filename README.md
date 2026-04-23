@@ -9,18 +9,15 @@ VRIK (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
 HIGGS (https://www.nexusmods.com/skyrimspecialedition/mods/43930)  
 PLANCK (https://www.nexusmods.com/skyrimspecialedition/mods/66025)  
 CBPC - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)		
-
-CBBE 3BA(optional i think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)
-
-More haptics CBPC VR config (https://www.nexusmods.com/skyrimspecialedition/mods/40749) 
-  This is the main mod this mod is build upon. Read the instalation instruction, it's not a mod that you just drop in your modlist, it need to edit specific CBPC file.
-I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use
-
-Fluffy M'rissi Replacer (optional) (https://www.nexusmods.com/skyrimspecialedition/mods/53654)
+CBBE 3BA(optional i think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)  
+More haptics CBPC VR config (https://www.nexusmods.com/skyrimspecialedition/mods/40749)  
+  -This is the main mod this mod is build upon. Read the instalation instruction, it's not a mod that you just drop in your modlist, it need to edit specific CBPC file.  
+  -I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use  
+Fluffy M'rissi Replacer (optional) (https://www.nexusmods.com/skyrimspecialedition/mods/53654)  
 
 If you got all of those, you should have all the proper requirement to make this plugins work. 
 
-BIG DISCLAIMER: This is Vibe coded with Opus 4.7. For real, Claude Code is fucking magical
+DISCLAIMER: This is Vibe coded with Opus 4.7. For real, Claude Code is fucking magical
 
 Explanation: This mod is a VR focused mod that integrate touch and grab from the Player to a NPC, detect which part of the bodies got interacted with, what does the NPC wear at that specific body slot, and fire a event trigger to let the NPC know and be aware of the interaction between the player and NPC. It come with delay to specific part according to what is the NPC wearing and where are they being touched.
 A NPC that get touch on her chest while wearing Heavy Armor on slot 32 will be told that the PLayer touched their (Heavy Armor's name) on their chest after the player made contact with that part for more than 4 second, compared to being naked, where she will be told that the player touched her naked left breast and will be told almost immediately about it. No accidental boob touch in life, same in VR.
