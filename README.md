@@ -11,8 +11,8 @@ PLANCK (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
 CBPC - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)  
 CBBE 3BA(optional i think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)  
 More haptics CBPC VR config (https://www.nexusmods.com/skyrimspecialedition/mods/40749)  
-```-This is the main mod this mod is build upon. Read the instalation instruction, it's not a mod that you just drop in your modlist, it need to edit specific CBPC file.
-```-I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use  
+       -This is the main mod this mod is build upon. Read the instalation instruction, it's not a mod that you just drop in your modlist, it need to edit specific CBPC file.  
+        -I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use  
 Fluffy M'rissi Replacer (optional) (https://www.nexusmods.com/skyrimspecialedition/mods/53654)  
 
 If you got all of those, you should have all the proper requirement to make this plugins work. 
