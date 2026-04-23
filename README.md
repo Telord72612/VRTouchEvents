@@ -3,10 +3,14 @@ SkyrimNet plugins for SkyrimVR touch or grab detection to be push to LLM for awa
 
 Requirement :
  	-SkyrimNet (and all it's requirement)
- 	-VRIK (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
- 	-HIGGS (https://www.nexusmods.com/skyrimspecialedition/mods/43930)
- 	-PLANCK (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
- 	-CBPC - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)		
+ 	
+	-VRIK (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
+ 	
+	-HIGGS (https://www.nexusmods.com/skyrimspecialedition/mods/43930)
+ 	
+	-PLANCK (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
+ 	
+	-CBPC - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)		
  	-CBBE 3BA(optional i think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)
  	-More haptics CBPC VR config (https://www.nexusmods.com/skyrimspecialedition/mods/40749)
 		-I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use
