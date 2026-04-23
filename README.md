@@ -2,8 +2,11 @@
 SkyrimNet plugins for SkyrimVR touch or grab detection to be push to LLM for awareness reaction 
 
 Requirement :
+
 SkyrimNet (and all it's requirement)
+
 VRIK (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
+
 HIGGS (https://www.nexusmods.com/skyrimspecialedition/mods/43930)
 PLANCK (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
 CBPC - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)		
