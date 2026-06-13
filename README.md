@@ -14,6 +14,13 @@ SkyrimNet plugins for SkyrimVR touch or grab detection to be push to LLM for awa
 &nbsp;&nbsp;-I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use  
 **Fluffy M'rissi Replacer** (optional) (https://www.nexusmods.com/skyrimspecialedition/mods/53654)  
 
+**V2.0 Requirement**  
+**OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)  
+**OR**  
+**SLO Aroused NG** (https://www.nexusmods.com/skyrimspecialedition/mods/151502)  
+**MFG Fix NG** (https://www.nexusmods.com/skyrimspecialedition/mods/133568?tab=files)
+Tested with OSL Aroused Reborn
+
 If you got all of those, you should have all the proper requirement to make this plugins work. 
 
 **Instalation**  
@@ -56,6 +63,12 @@ Any NPC choked will be so between 2 to 4 ingame hour, with a penality of 50% hea
 
 There is a total of 10 tracked slot for passout NPC. If you remove the mod while passout NPC are around, they may not come back, or get their regen back, so be mindful of that.
 
+**V2.0 Feature**  
+**Weapon Touch Detection**  
+Weapon will not create touch event on NPC. Bladed or Sharp weapon type will be more aggresif and will triger DirectNarration more. Blunt or non lethat weapon(like a bow) will be seen less threatening and will trigger GenerateNPCThought more. No more pushing NPC around with your weapon without consequence.
+
+**Arousal and Face Reaction**  
+Touch/Grab to certain intimate body parts will now affect arousal. For each of those event, an LLM call is sent to the Meta LLM for an evaluation for how much arousal change should it be and what emotion come with it. Those emotion will be sent to MFG Fix NG so it can applied them to the face, so if the NPC is angry or happy, it will be seen. 
 
 **DO NOT** remove the mod while NPC are passed out from choking. It's a quest event that track their state. They will get stuck in that state if you remove the quest while NPC are out cold
 
