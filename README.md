@@ -208,3 +208,13 @@ ways PPB can go silent with no error.
 Compiled artifacts (`.dll`, `.pex`, the packed FOMOD) are not in git — get them from the Nexus
 release. Build the plugin with `plugin/build.bat`; compile the Papyrus with Caprica or the CK
 compiler against SkyrimNet, HIGGS, OSL Aroused and Mfg Fix.
+
+## License
+
+[MIT](LICENSE) — use it, fork it, copy pieces of it into your own mod. No attribution required,
+though it is always appreciated.
+
+The one file to be aware of is `plugin/src/PpbTouchAPI.h`: that is **Precision Physic Bodies'**
+consumer contract, copied verbatim, and PPB's own documentation explicitly invites consumers to do
+exactly that. Both mods share an author, so it ships under the same terms — but if you reuse it,
+take it from PPB's repo so you get the current revision rather than this snapshot.
