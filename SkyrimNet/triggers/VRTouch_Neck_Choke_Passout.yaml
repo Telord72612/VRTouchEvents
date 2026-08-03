@@ -1,0 +1,22 @@
+name: "VRTouch_Neck_Choke_Passout"
+description: "NPC has been choked unconscious — paralyzed and unresponsive"
+
+eventCriteria:
+  eventType: "vrtouch_event"
+  schemaConditions:
+    - fieldPath: "trigger_name"
+      operator: "equals"
+      value: "VRTouch_Neck_Choke_Passout"
+      caseSensitive: false
+
+response:
+  type: "direct_narration"
+  content: "*{{ event_json.touched }}'s eyes flutter and roll back as the last of their strength gives out — they go limp in {{ event_json.toucher }}'s grasp, unconscious*"
+
+audience: "everyone"
+
+enabled: true
+interrupt: false
+probability: 1
+cooldownSeconds: 60
+priority: 3

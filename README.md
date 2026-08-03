@@ -184,3 +184,37 @@ Anyway, hope you all enjoy it. I certainly enjoy petting M'rissi's tail.
 
 
 
+
+---
+
+## Source layout (this repository)
+
+| path | what |
+|---|---|
+| `plugin/src/PpbBridge.cpp` | the SKSE plugin's PPB touch-API bridge — sessions, priority, both-hands merge, mod-event emit |
+| `plugin/src/PpbTouchAPI.h` | **PPB's** consumer contract, copied verbatim (not ours) |
+| `plugin/src/main.cpp` | plugin entry, install points, Papyrus natives |
+| `scripts/*.psc` | Papyrus: the dispatcher, the reaction tables and narration builder |
+| `scripts/gates/stub/` | the no-op gates the Base install ships |
+| `scripts/gates/patches/` | the real gate implementations the FOMOD options install over them |
+| `SkyrimNet/triggers/` | the 3 trigger YAMLs |
+| `SkyrimNet/prompts/` | the arousal evaluation prompt |
+
+**[CONNECTING_TO_PPB.md](CONNECTING_TO_PPB.md) — how the PPB integration works**, written for anyone
+building their own mod on the same API. Includes the mistakes that cost the most: the `AddTask`
+deadlock, digest-vs-raw, the per-region handover that shreds a continuous touch, and the several
+ways PPB can go silent with no error.
+
+Compiled artifacts (`.dll`, `.pex`, the packed FOMOD) are not in git — get them from the Nexus
+release. Build the plugin with `plugin/build.bat`; compile the Papyrus with Caprica or the CK
+compiler against SkyrimNet, HIGGS, OSL Aroused and Mfg Fix.
+
+## License
+
+[MIT](LICENSE) — use it, fork it, copy pieces of it into your own mod. No attribution required,
+though it is always appreciated.
+
+The one file to be aware of is `plugin/src/PpbTouchAPI.h`: that is **Precision Physic Bodies'**
+consumer contract, copied verbatim, and PPB's own documentation explicitly invites consumers to do
+exactly that. Both mods share an author, so it ships under the same terms — but if you reuse it,
+take it from PPB's repo so you get the current revision rather than this snapshot.

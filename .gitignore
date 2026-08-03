@@ -1,0 +1,22 @@
+# Build output
+plugin/build/
+plugin/out/
+*.log
+
+# Compiled Papyrus — built from scripts/*.psc with Caprica or the CK compiler
+*.pex
+
+# Binary release artifacts — these live on the Releases page / Nexus, not in git
+*.dll
+*.esp
+*.esm
+*.esl
+*.bsa
+*.7z
+*.zip
+
+# vcpkg / CMake local state
+vcpkg_installed/
+CMakeUserPresets.json
+.vs/
+.vscode/
