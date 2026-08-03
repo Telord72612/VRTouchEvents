@@ -10,8 +10,8 @@ SkyrimNet plugin for SkyrimVR touch and grab detection, pushed to the LLM so NPC
 **V3.0 no longer uses CBPC for touch detection.** All sensing now comes from **Precision Physic Bodies (PPB)**, which reads the actual Havok collision bodies instead of CBPC collision spheres. CBPC and "More Haptics VR CBPC config" are **no longer requirements**, and V3.0 ships **no CBPC config files at all**.
 
 What this buys you:
-- **107 named body capsules** instead of ~17 nodes — "left cheekbone", "right forearm, wrist end", "upper glute", not just "face" and "arm".
-- **Both hands at once**, merged into ONE reaction instead of two.
+- **107 named body capsules** instead of ~17 nodes — "left cheekbone", "right forearm, wrist end", "upper glute", not just "face" and "arm".  
+- **Both hands at once**, merged into ONE reaction instead of two.  
 - **Real penetration depth**, so hovering, resting, pressing and going inside are all different things.
 - **Weapons and held objects natively** — the weapon's actual name reaches the LLM.
 - **Tails that actually work on equipped HDT-SMP tails**, which the V2 CBPC config silently could not do.
@@ -30,28 +30,28 @@ If male NPC touch reactions matter to you, **stay on V2.0**.
 ## V3.0 Requirements
 
 **SkyrimNet** (and all of its own requirements)
-**Precision Physic Bodies** (https://www.nexusmods.com/skyrimspecialedition/mods/186100) — **hard requirement. Without it this mod does nothing at all.**
-**VRIK** (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
-**HIGGS** (https://www.nexusmods.com/skyrimspecialedition/mods/43930)
-**PLANCK** (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
+**Precision Physic Bodies** (https://www.nexusmods.com/skyrimspecialedition/mods/186100) — **hard requirement. Without it this mod does nothing at all.**  
+**VRIK** (https://www.nexusmods.com/skyrimspecialedition/mods/23416)  
+**HIGGS** (https://www.nexusmods.com/skyrimspecialedition/mods/43930)  
+**PLANCK** (https://www.nexusmods.com/skyrimspecialedition/mods/66025)  
 
 Optional, for the arousal + facial expression module:
-**OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)
-**OR**
-**SLA Aroused NG** (https://www.nexusmods.com/skyrimspecialedition/mods/151502)
-**MFG Fix NG** (https://www.nexusmods.com/skyrimspecialedition/mods/133568?tab=files)
-Tested with OSL Aroused Reborn.
+**OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)  
+**OR**  
+**SLA Aroused NG** (https://www.nexusmods.com/skyrimspecialedition/mods/151502)  
+**MFG Fix NG** (https://www.nexusmods.com/skyrimspecialedition/mods/133568?tab=files)  
+Tested with OSL Aroused Reborn.  
 
 ⚠ **HIGGS is not optional even if you never grab anything.** PPB's whole detection loop is driven from a HIGGS frame callback, so no HIGGS means no touch detection — and it fails *silently*, with no error message. Same for VRIK, which PPB uses to tell a pointing finger from a fist from an open palm.
 
 **Not required any more in V3.0:** CBPC, CBBE 3BA, More Haptics VR CBPC config. (PPB has its own requirements — check its page.)
 
 ### V2.0 Requirements (legacy)
-**CBPC** — Physics and Collisions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)
-**CBBE 3BA** (optional, I think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)
-**More Haptics CBPC VR config** (https://www.nexusmods.com/skyrimspecialedition/mods/40749)
-&nbsp;&nbsp;- This was the main mod V2 was built on. It is not a drop-in mod, it needs specific CBPC files edited.
-&nbsp;&nbsp;- I highly recommend removing the NPCEyeBone if you use MfgFix — it prevents NPC eye movement other mods want to use.
+**CBPC** — Physics and Collisions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)  
+**CBBE 3BA** (optional, I think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)  
+**More Haptics CBPC VR config** (https://www.nexusmods.com/skyrimspecialedition/mods/40749)  
+&nbsp;&nbsp;- This was the main mod V2 was built on. It is not a drop-in mod, it needs specific CBPC files edited.  
+&nbsp;&nbsp;- I highly recommend removing the NPCEyeBone if you use MfgFix — it prevents NPC eye movement other mods want to use.  
 
 ---
 
