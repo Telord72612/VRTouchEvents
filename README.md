@@ -29,11 +29,12 @@ If male NPC touch reactions matter to you, **stay on V2.0**.
 
 ## V3.0 Requirements
 
-**SkyrimNet** (and all of its own requirements)
-**Precision Physic Bodies** (https://www.nexusmods.com/skyrimspecialedition/mods/186100) — **hard requirement. Without it this mod does nothing at all.**  
+**SkyrimNet** (and all of its own requirements)  
 **VRIK** (https://www.nexusmods.com/skyrimspecialedition/mods/23416)  
 **HIGGS** (https://www.nexusmods.com/skyrimspecialedition/mods/43930)  
 **PLANCK** (https://www.nexusmods.com/skyrimspecialedition/mods/66025)  
+**Precision Physic Bodies** (https://www.nexusmods.com/skyrimspecialedition/mods/186100) 
+
 
 Optional, for the arousal + facial expression module:
 **OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)  
