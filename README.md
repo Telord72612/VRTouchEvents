@@ -1,79 +1,185 @@
+
 # VRTouchEvents
-SkyrimNet plugins for SkyrimVR touch or grab detection to be push to LLM for awareness reaction 
 
-**Requirement** :
+SkyrimNet plugin for SkyrimVR touch and grab detection, pushed to the LLM so NPCs are aware of and react to being touched.
 
-**SkyrimNet** (and all it's requirement)  
-**VRIK** (https://www.nexusmods.com/skyrimspecialedition/mods/23416)  
-**HIGGS** (https://www.nexusmods.com/skyrimspecialedition/mods/43930)  
-**PLANCK** (https://www.nexusmods.com/skyrimspecialedition/mods/66025)  
-**CBPC** - Physic and Collissions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)  
-**CBBE 3BA**(optional i think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)  
-**More haptics CBPC VR config** (https://www.nexusmods.com/skyrimspecialedition/mods/40749)  
-&nbsp;&nbsp;-This is the main mod this mod is build upon. Read the instalation instruction, it's not a mod that you just drop in your modlist, it need to edit specific CBPC file.  
-&nbsp;&nbsp;-I highly recommend to remove the NPCEyeBone if you are using MfgFix, it prevent eye movement from NPC for other mod to use  
-**Fluffy M'rissi Replacer** (optional) (https://www.nexusmods.com/skyrimspecialedition/mods/53654)  
+---
 
-**V2.0 Requirement**  
-**OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)  
-**OR**  
-**SLO Aroused NG** (https://www.nexusmods.com/skyrimspecialedition/mods/151502)  
+## ⚠ V3.0 IS A COMPLETE REWRITE — READ THIS FIRST
+
+**V3.0 no longer uses CBPC for touch detection.** All sensing now comes from **Precision Physic Bodies (PPB)**, which reads the actual Havok collision bodies instead of CBPC collision spheres. CBPC and "More Haptics VR CBPC config" are **no longer requirements**, and V3.0 ships **no CBPC config files at all**.
+
+What this buys you:
+- **107 named body capsules** instead of ~17 nodes — "left cheekbone", "right forearm, wrist end", "upper glute", not just "face" and "arm".
+- **Both hands at once**, merged into ONE reaction instead of two.
+- **Real penetration depth**, so hovering, resting, pressing and going inside are all different things.
+- **Weapons and held objects natively** — the weapon's actual name reaches the LLM.
+- **Tails that actually work on equipped HDT-SMP tails**, which the V2 CBPC config silently could not do.
+- No more CBPC config editing during install.
+
+**What it costs you — this is important:**
+
+> **PPB only drives FEMALE NPCs of mapped races** (the human catch-all — which covers elves, orcs and most custom races — plus Argonian, Khajiit and Draenei, plus anything you add to PPB's `PPB_Skeletons_Added_Race.ini`).
+>
+> **Males, children and creatures produce NO touch reactions in V3.0.** V2.0 covered them incidentally through CBPC. They will come back as PPB's own coverage grows — no update to this mod will be needed when it does.
+
+If male NPC touch reactions matter to you, **stay on V2.0**.
+
+---
+
+## V3.0 Requirements
+
+**SkyrimNet** (and all of its own requirements)
+**Precision Physic Bodies** (https://www.nexusmods.com/skyrimspecialedition/mods/186100) — **hard requirement. Without it this mod does nothing at all.**
+**VRIK** (https://www.nexusmods.com/skyrimspecialedition/mods/23416)
+**HIGGS** (https://www.nexusmods.com/skyrimspecialedition/mods/43930)
+**PLANCK** (https://www.nexusmods.com/skyrimspecialedition/mods/66025)
+
+Optional, for the arousal + facial expression module:
+**OSL Aroused Reborn** (https://www.nexusmods.com/skyrimspecialedition/mods/65454)
+**OR**
+**SLA Aroused NG** (https://www.nexusmods.com/skyrimspecialedition/mods/151502)
 **MFG Fix NG** (https://www.nexusmods.com/skyrimspecialedition/mods/133568?tab=files)
-Tested with OSL Aroused Reborn
+Tested with OSL Aroused Reborn.
 
-If you got all of those, you should have all the proper requirement to make this plugins work. 
+⚠ **HIGGS is not optional even if you never grab anything.** PPB's whole detection loop is driven from a HIGGS frame callback, so no HIGGS means no touch detection — and it fails *silently*, with no error message. Same for VRIK, which PPB uses to tell a pointing finger from a fist from an open palm.
 
-**Instalation**  
-Just install like any mod, there isn't any setting needed. Put in below all the requirement for MO2 and above for Vortex.  
-There is two patch coming with it, one for SexLab and one for Ostim, that will prevent any touch/grab events from happening during those scene, in case you have spamming happening
+**Not required any more in V3.0:** CBPC, CBBE 3BA, More Haptics VR CBPC config. (PPB has its own requirements — check its page.)
 
-**Explanation**:  
-This mod is a VR focused mod that integrate touch and grab from the Player to a NPC, detect which part of the bodies got interacted with, what does the NPC wear at that specific body slot, and fire a event trigger to let the NPC know and be aware of the interaction between the player and NPC. It come with delay to specific part according to what is the NPC wearing and where are they being touched.  
-A NPC that get touch on her chest while wearing Heavy Armor on slot 32 will be told that "the Player touched their (Heavy Armor's name) on their chest" after the player made contact with that part for more than 4 second, compared to being naked, where she will be told that "the player touched her naked left breast" and will be told immediately about it. No accidental boob touch in life without consequence, same in VR.
+### V2.0 Requirements (legacy)
+**CBPC** — Physics and Collisions for SSE (https://www.nexusmods.com/skyrimspecialedition/mods/21224)
+**CBBE 3BA** (optional, I think) (https://www.nexusmods.com/skyrimspecialedition/mods/30174)
+**More Haptics CBPC VR config** (https://www.nexusmods.com/skyrimspecialedition/mods/40749)
+&nbsp;&nbsp;- This was the main mod V2 was built on. It is not a drop-in mod, it needs specific CBPC files edited.
+&nbsp;&nbsp;- I highly recommend removing the NPCEyeBone if you use MfgFix — it prevents NPC eye movement other mods want to use.
 
-**How it work**  
-By using CBPC and "more haptic VR CBPC", i was able to get Claude to figure out how to make new touch node and leaf and add them to CBPC config, to make them detectable with VRIK and HIGGS, so that VRTouchEvents can send SkyrimNet triggers events to let the LLM know where they got touched, how, and what they are wearing at that location, so they can react properly. I used a bunch of existing CPBC contact node and made a bunch of new one. Breast, belly and butt (3BBB) is done by SMP. I haven't tested with just CBPC, but it should work with it.
+---
 
-There is a total of 17 body parts that can be touched : Head,Face,hands,arms,foot,legs,L&R breast,chest,belly,upper back,lower back,butt,genitals,tails upper,tails lower, and neck for choking.  
-Each parts have a specific delay according to their current equipped slot gear on that body part, using head(30),mask(44), hand(33),arms(34),foor(37),body(32),butt/genital(32,49&52).  
-Touching or grabing someone wearing heavy armor will take longer to be detected compared to someone being naked. Detected dress state is Bare,clothes,Light Armor & Heavy armor. Touching bare and clothes just state the cloths. Touch/grab armor will state the name of the armor piece being touched/grabbed.
+## Installation
 
-There is a global cooldown of 15 second between touch or grab events for that NPC, so that multiple place on the body won't spam events all at once. The first one that fire will prevent any touch/grab events for 15 second for that NPC. Except for interrupting touch/grab  
-The interrupting touch/grab for the NPC action are as follow: touching/grabbing breast/butt bare or clothed, and touching/grabbing  genitals, any dress state, and choking. Those action are considered important enough that it should stop any action the NPC is doing and should make them react right away.
+Install like any other mod. No settings needed, no config editing. Put it **below** all requirements in MO2, **above** them in Vortex.
 
-Khajiit and Argonian tails can be touched. I added CPBC node for them to be detected. It work with vanilla and HDT-SMP tails.  
-**Bonus**, if you download "Fluffy M'rissi Replacer", her tails can be moved around a bit. Not a lots, but you can see it swing with your touch, and she will react to that when you touch it. No grabbing, there is no real skeleton node and that would have been too much change, could potentially break all animation for herself. Technically HDT-SMP Tails move too, but the XML file are made to have them being fairly heavy, so it's barely noticeable when you touch them. Make them move more would be equivalent to changing a lot of the physic in general. Fluffy m'rissi's tail is more light and move around a lot, so it's affected by the touch more and way more noticeable. 
+Two optional patches are included — one for SexLab, one for OStim. They stop touch and grab events from firing during those scenes, and they also put the whole mod to sleep for the duration so it costs nothing while a scene runs.
 
-**CHOCKING**: there is a added feature where NPC can be choked by the player. If you grab any NPC Neck, after 2sec, a choking sound will play and the will become unconscious and ragdoll after 15sec. And of you keep holding, they will die after 25 sec. Grabbing the neck is REALLY HARD for just cause. You really need to lift the chin up and grab at the neck, almost making sure your thumb is on one side and your finger are on the other side of the throat. If you don't hear choking after 2 sec, you missed. There is a 1 sec delay before it start for forgiveness, but it's so hard to do that it's almost not needed.
+---
 
-There is multiple stage to choking:  
--less than 1 sec: no consequence  
--2 to 3 sec choking: on release, NPC will be told that you grabbed their neck and squeezed  
--3 to 7 sec choking: on release, NPC will be told that you grabbed their neck and squeezed hard enough to create pain and make them unable to breath  
--at 7 sec: NPC will become hostile and fight you while holding them if their relationship is less than 1  
--7 to 15 sec choking: on release, NPC will be told that you grabbed their neck and squeezed hard enough to create  lasting pain and make them unable to breath to almost bring you to a passout point.  
--at 10 sec: if relationship is less than 2, a "SendAssaultAlarm()" is sent to friendly faction member if any of the friend of the choked NPC are around and can see you, like guards or fighting faction. If you are not in stealth mode and unseen, the assault alarm won't be sent.  There will also be a general SkyrimNet events posted for awareness of NPC around you to see what you are doing, in case you are surrounded by friendly that won't attack, they will at least be aware.   
--at 15 sec: NPC will ragdoll and become uncounsious. Choking noise will stop. The "SendAssaultAlarm()" will be removed if you didn't get detected while choking. The NPC being choked will stop being hotile.  
--at 25 sec: the NPC, if still being choked, will die if they are not protected/essential  
+## What it does
 
-Choking an NPC is considered an aggression. I'm sure there is NPC that will enjoy having it according to their bio/personality, but if you release before 7 second, it will be fine, no hostility/assault will be triggered. And if they passout, all the hostility/alarms get removed if no one else seen you. At a minimun of relationship 2 with that NPC, the assault alarm won't triggers, as it's a "serious" fight between friend. 
-Choking an NPC while sneaking won't triggers an Assault Alarm **if you are not being detected during the choke**. This exclude the person being choked, they are not one of the person that can detect you. Let me know if that feature need work, i didn't tested it much.
+This is a VR-focused mod that turns physical contact between the player and an NPC into something the LLM knows about. It detects **which exact part of the body** was touched, **what the NPC is wearing at that spot**, **what touched them** (fingertip, palm, fist, grip, a weapon, a held object), **how hard**, and **for how long** — then tells SkyrimNet, and lets the NPC react in character.
 
-Any NPC choked will be so between 2 to 4 ingame hour, with a penality of 50% health and no regen while passout. They can be made to regain consciousness with a healing spell or a potion. 
+Delays scale with what she is wearing and where you touched. A chest touch through heavy armor takes about 4 seconds of sustained contact before it registers as anything. The same touch on bare skin is reported immediately. No accidental boob touch without consequence in real life, same in VR.
 
-There is a total of 10 tracked slot for passout NPC. If you remove the mod while passout NPC are around, they may not come back, or get their regen back, so be mindful of that.
+### The narration is deliberately neutral
 
-**V2.0 Feature**  
-**Weapon Touch Detection**  
-Weapon will not create touch event on NPC. Bladed or Sharp weapon type will be more aggresif and will triger DirectNarration more. Blunt or non lethat weapon(like a bow) will be seen less threatening and will trigger GenerateNPCThought more. No more pushing NPC around with your weapon without consequence.
+The mod tells the LLM **what happened, and nothing else**:
 
-**Arousal and Face Reaction**  
-Touch/Grab to certain intimate body parts will now affect arousal. For each of those event, an LLM call is sent to the Meta LLM for an evaluation for how much arousal change should it be and what emotion come with it. Those emotion will be sent to MFG Fix NG so it can applied them to the face, so if the NPC is angry or happy, it will be seen. 
+> *"Telord is pressing firmly into Carmella's chest (right breast) with their left palm, and brushing against Carmella's belly (navel) with their right fingertip, held for 4 seconds."*
 
-**DO NOT** remove the mod while NPC are passed out from choking. It's a quest event that track their state. They will get stuck in that state if you remove the quest while NPC are out cold
+It never says whether the touch was welcome, intimate, affectionate or violating. **That judgement belongs to the NPC**, and it is made by the LLM from her own personality, her history with you, and how she currently feels about you. A lover and someone who despises you get the exact same sentence from this mod and react completely differently — which is the entire point.
 
-**DISCLAIMER**: This is Vibe coded with Opus 4.7. For real, Claude Code is fucking magical. I understand how the mod work and it's mechanic, but i didn't do the Code, it's was all done by Opus 4.7, so i'm not sure how safe this is. I'm playing with it, and my mod list is super heavy, 2000mod with physic, AI, fur shaders, the full CS suit, and i didn't had any issue. If there is any bug, let me know and i'll see what i can do. If any the real dev out there tell me that this mod is dangerous, i'll pull it down. 
+---
 
-Anyway, hope you guy enjoy it. I certainly enjoy petting M'rissi's tail
+## How it works
+
+PPB maintains real Havok collision capsules on driven NPCs and names all 107 of them. VRTouchEvents' SKSE plugin reads that stream every frame, decides which contact actually matters, merges both hands into a single interaction, and hands the result to Papyrus, which applies the delays, cooldowns and armor rules and composes the sentence.
+
+**More specific always beats longer.** If your hand has been resting on her chest for two seconds and then slides onto her breast, the breast wins immediately — you do not wait out a new delay. The same applies going deeper: opening → inside → deepest each override the last, and only one reaction fires, at the deepest point reached.
+
+**Both hands are one interaction.** Two hands on the same NPC produce a single reaction naming both, not two competing ones.
+
+### Body parts
+
+Around 28 reaction categories drawn from the 107 named capsules:
+
+head, face, ear, lips, mouth, throat wall, neck, shoulder, chest, left breast, right breast, belly, waist, hips, backside, groin, clitoris, vaginal, cervix, uterus, anal, rectum, arms, hands, legs, feet, tail base, tail tip.
+
+The LLM also receives the exact capsule underneath, so "her face" arrives as "her face (left cheekbone)". That extra precision is deliberate — it gives the LLM real context to react to.
+
+### Armor
+
+Detected states are **bare, clothes, light armor, heavy armor**. Bare and clothed touches state the garment; armor states the name of the piece being touched.
+
+Slots probed: head (30), mask (44), hands (33), arms (34), feet (37), body (32), pelvis (49 and 52).
+
+Two V3 corrections worth knowing:
+- **Face gear now reads slot 44 then falls back to slot 30.** Vanilla Skyrim never uses slot 44, so in V2 every face touch read as bare even through a full helmet.
+- **Interior contacts read the pelvis slots only, never the body slot.** In V2 a robe on slot 32 made the mod decide a real penetration was a detection error and throw it away.
+
+### Cooldown
+
+There is a 15-second global cooldown per NPC, so touching several places at once does not spam events. The first one to fire blocks the rest for that NPC.
+
+**Interrupting contacts bypass it**: breasts and butt (bare or clothed), anything on the intimate ladder at any dress state, and choking. Those are considered important enough to stop whatever the NPC is doing.
+
+### Tails
+
+Khajiit and Argonian tails are touchable, split into **base / mid / tip** thirds. PPB detects the tail rig at runtime, so this works on **equipped HDT-SMP tails** — which V2 could not do, because its config was locked to specific race FormIDs and SMP renames armor-carried bones when they are equipped.
+
+
+---
+
+## CHOKING
+
+Grab an NPC by the throat and it starts a choke. In V3 this arms from PPB's own neck capsule the moment it sees a grip on it, which is considerably more reliable than V2's method.
+
+**Timeline while you keep holding:**
+
+| time | what happens |
+|---|---|
+| 1s | pain sounds start |
+| 2s | choking sound plays |
+| 3s | fear builds in her head (unvoiced — she cannot speak) |
+| **5s** | **she fights back.** Relationship ≤ 1 draws weapons; above that it is a fists-only brawl |
+| **7s** | panic sets in, and bystanders who can see it react |
+| **15s** | passes out, ragdolls, choking sound stops |
+| **25s** | **dies**, if not protected or essential and you never let go |
+
+Re-choking an NPC who is already unconscious kills her in **10 more seconds**.
+
+**On release, depending on how long you held:**
+- **under 1s** — nothing, no consequence
+- **1 to 3s** — she is told you grabbed her throat and squeezed briefly
+- **3 to 7s** — squeezed hard enough to hurt and stop her breathing
+- **7 to 15s** — squeezed nearly to the point of blacking out
+
+**Assault alarm:** from **7 seconds**, if her relationship with you is **1 or below** and someone actually witnessed it, guards and her faction are alerted. At relationship 2 or higher no alarm is raised — it reads as a serious fight between friends. **Choking while sneaking raises no alarm if you are never detected during it**, and the victim herself does not count as a witness. Let me know if that needs work, I have not tested it heavily.
+
+A choked-out NPC stays down for **2 to 4 in-game hours**, at 50% health with no regeneration. A healing spell or potion wakes her early. **10 unconscious NPCs are tracked at once.**
+
+She cannot talk while being choked — but she still notices. If your other hand grabs her while the first is on her throat, she registers that too.
+
+---
+
+## Weapons and held objects
+
+Weapons and anything you are holding create contact events with the item's real name, so "he rested his Iron Rapier against her cheek" reaches the LLM as exactly that.
+
+**Actual combat hits are filtered out.** If you have damaged her in the last 1.5 seconds, blade contact is treated as fighting, not touching, and no social reaction fires. A gentle blade rest deals no damage, so deliberate weapon-touch still works.
+
+---
+
+## Arousal and facial reaction
+
+Touching intimate areas can affect arousal. Each one sends a query to the LLM asking how much arousal should change **and in which direction** — a touch from someone she dislikes goes negative — plus which expression fits. The expression is applied through MFG Fix NG, so if she is angry, surprised or happy, you can see it on her face.
+
+This module is optional and off unless you install it and have an arousal backend.
+
+---
+
+## Warnings
+
+**DO NOT remove the mod while NPCs are unconscious from choking.** Their state is tracked by a quest. Removing it mid-passout can leave them stuck unconscious, or without their health regeneration.
+
+**No PPB, no mod.** If PPB is missing, broken, or its hand colliders are disabled, VRTouchEvents goes completely silent with no error. If nothing seems to be happening, check PPB first.
+
+---
+
+## DISCLAIMER
+
+This is vibe coded with Claude Code. For real, Claude Code is fucking magical. I understand how the mod works and its mechanics, but I did not write the code — Claude did — so I am not certain how safe this is. I play with it on a very heavy load order: 2000 mods with physics, AI, fur shaders, the full CS suite, and I have had no issues. If you find a bug, let me know and I will see what I can do. If a real dev tells me this mod is dangerous, I will pull it down.
+
+Anyway, hope you all enjoy it. I certainly enjoy petting M'rissi's tail.
+
+
 
 
