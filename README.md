@@ -197,8 +197,9 @@ Anyway, hope you all enjoy it. I certainly enjoy petting M'rissi's tail.
 | `scripts/*.psc` | Papyrus: the dispatcher, the reaction tables and narration builder |
 | `scripts/gates/stub/` | the no-op gates the Base install ships |
 | `scripts/gates/patches/` | the real gate implementations the FOMOD options install over them |
-| `SkyrimNet/triggers/` | the 3 trigger YAMLs |
 | `SkyrimNet/prompts/` | the arousal evaluation prompt |
+
+As of V3.1 the mod ships **no trigger YAMLs** — every reaction is a direct SkyrimNet API call. See [CHANGELOG.md](CHANGELOG.md).
 
 **[CONNECTING_TO_PPB.md](CONNECTING_TO_PPB.md) — how the PPB integration works**, written for anyone
 building their own mod on the same API. Includes the mistakes that cost the most: the `AddTask`

@@ -47,17 +47,8 @@ Bool   modOff       = False  ; TRUE while the mod is fully unregistered for a sc
 Actor  sceneActor            ; the in-scene actor that triggered the shutdown
 Int    sceneEndGrace = 0     ; consecutive "scene ended" polls before re-arming
 
-; ================================================================
-; Per-NPC cooldown registry
-;
-; One fire on actor X blocks further non-interrupting touch/grab
-; events on X for GlobalCooldown seconds.  Scoped per-actor so
-; touching NPC_A never cools down NPC_B.  16 slots is plenty —
-; realistic play touches a handful of distinct actors in any 15s
-; window; when full we evict the oldest entry (LRU).
-; ================================================================
-Actor[] cdActor
-Float[] cdTime
+; (The V2 per-NPC cooldown ring, cdActor/cdTime, was deleted with
+;  FireTrigger.  V3 owns pacing through v3CdActor + the two clocks below.)
 
 ; ================================================================
 ; Cached armor form from last GetArmorState call
@@ -93,7 +84,6 @@ Bool   chokeFiredWitnessed  = False  ; 7s public-witness trigger fired?
 Bool   chokeWarnedNoSound   = False  ; warned once that ChokingSound property is unset?
 Bool   chokeIsKillRun       = False  ; choke target is already KO'd — count toward kill, not passout
 Bool   chokeIsLeft          = False  ; which hand's controller grip holds the throat (liveness poll)
-Bool   chokeFiredThought3   = False  ; 3s choke fear-thought pushed to victim?
 Bool   chokeFiredThought7   = False  ; 7s choke panic-thought pushed to victim?
 Float  chokeEndTime         = 0.0    ; realtime a choke last ENDED — re-arm lockout
 Actor  chokeLastRelActor    = None   ; last actor a release-tier fired for — debounce
@@ -173,8 +163,29 @@ Bool Property V3LogOnly = False Auto
 ; ================================================================
 Bool Property ChokeKillAt25 = True Auto
 
+; ================================================================
+; ★ TWO-TIER PER-NPC COOLDOWN (user spec, 2026-08-08)
+; ================================================================
+; One actor ring, TWO independent clocks, because "interrupting" has to
+; mean two different things at once:
+;
+;   v3CdTime         the NORMAL gate.  An intimate/interrupt contact
+;                    IGNORES it — that is the whole point of the tier: a
+;                    hand on a bare breast must land even if she reacted to
+;                    something ordinary two seconds ago.
+;   v3CdIntimateTime the INTIMATE gate.  An interrupt contact respects its
+;                    OWN clock.  Without this, hammering one breast queues
+;                    a request per second, the LLM never gets to finish an
+;                    answer, and the net result is NO reaction at all —
+;                    the exact spam failure the tier was meant to avoid.
+;
+; So: interrupts break the normal gate, never their own.
+; A firing interrupt stamps BOTH clocks (she just reacted, so an ordinary
+; touch should not pile on top); an ordinary fire stamps only the normal
+; clock, leaving intimate contact free to cut in immediately.
 Actor[] v3CdActor                    ; V3 per-NPC cooldown ring (16 slots)
-Float[] v3CdTime
+Float[] v3CdTime                     ; last fire of ANY kind
+Float[] v3CdIntimateTime             ; last fire of an INTERRUPT-tier contact
 Actor[] v3PendActor                  ; delay-wait ring: contact seen, dwell not yet met
 
 ; ================================================================
@@ -322,13 +333,6 @@ Function Setup()
 
     lastArmor = None
 
-    ; Initialize per-NPC cooldown arrays.  Preserves entries on
-    ; OnPlayerLoadGame (in-flight cooldowns carry across a save).
-    if cdActor.Length < 16
-        cdActor = new Actor[16]
-        cdTime  = new Float[16]
-    EndIf
-
     ; Arousal feature: active only if (a) an arousal backend (OSL Aroused / SLA)
     ; is present, AND (b) the optional Arousal module is installed.  The Base mod
     ; ships a VRTouch_ArousalGate STUB whose IsEnabled() returns False, so arousal
@@ -389,6 +393,15 @@ Function Setup()
         v3CdActor = new Actor[16]
         v3CdTime  = new Float[16]
     EndIf
+    ; ⚠ v3CdIntimateTime is allocated INDEPENDENTLY, not inside the block
+    ; above.  On a save made before the two-tier cooldown existed, v3CdActor
+    ; is already sized 16, so that guard is false and this array would stay
+    ; None forever — every V3IsOnCooldown/V3RecordFire call would then bail
+    ; on its length check and the gate would silently never apply.
+    ; Same pattern, same reason, as koHpAtKO above.
+    if v3CdIntimateTime.Length < 16
+        v3CdIntimateTime = new Float[16]
+    EndIf
     if v3PendActor.Length < 16
         v3PendActor = new Actor[16]
     EndIf
@@ -409,9 +422,11 @@ Function Setup()
     ;   - TickChoke polls HiggsVR.GetGrabbedObject on both hands for choke
     ;     liveness (witness 1 of 2; witness 2 is chokeLastContact from PPB).
 
-    ; Register SkyrimNet event schema for YAML trigger matching
-    RegisterVRTouchSchema()
-    RegisterWeaponSchemas()
+    ; Register the SkyrimNet event schema.
+    ; Only vrtouch_contact remains.  The V2 `vrtouch_event` schema and the
+    ; two `vrtouch_weapon*` schemas were deleted with FireTrigger — nothing
+    ; emits those event types any more, and vrtouch_weapon/_alert were never
+    ; populated even in V2.
     RegisterV3Schema()
 
     ; Open the dedicated Papyrus user log -> Documents\My Games\Skyrim VR\Logs\Script\User\VRTouchEvents.0.log
@@ -425,52 +440,6 @@ Function Setup()
     EndIf
 EndFunction
 
-; ================================================================
-; Register SkyrimNet event schema for vrtouch_event type.
-; Called on every Setup() — RegisterEventSchema is idempotent.
-; ================================================================
-Function RegisterVRTouchSchema()
-    String f = "[" + \
-        "{\"name\":\"trigger_name\",\"type\":0,\"required\":true,\"description\":\"VRTouch trigger ID\"}," + \
-        "{\"name\":\"touched\",\"type\":0,\"required\":true,\"description\":\"NPC being touched\"}," + \
-        "{\"name\":\"toucher\",\"type\":0,\"required\":true,\"description\":\"Person touching\"}," + \
-        "{\"name\":\"clothing_name\",\"type\":0,\"required\":false,\"description\":\"Clothing or armor name\",\"defaultValue\":\"\"}" + \
-        "]"
-    String t = "{" + \
-        "\"recent_events\":\"**{{toucher}}** touched {{touched}} ({{time_desc}})\",\"raw\":\"{{toucher}} touched {{touched}} ({{trigger_name}})\",\"compact\":\"{{toucher}}->{{touched}}\",\"verbose\":\"VRTouch: {{toucher}} triggered {{trigger_name}} on {{touched}}\"" + \
-        "}"
-    SkyrimNetApi.RegisterEventSchema("vrtouch_event", "VRTouch Physical Event", \
-        "VR physical touch or grab event", f, t, true, 15000, true, false)
-EndFunction
-
-; ================================================================
-; Register the two weapon-touch schemas.  SkyrimNet's interrupt flag
-; is set per-SCHEMA (not per-event), so we register the same shape
-; twice: a non-interrupting one for ordinary weapon contact, and an
-; interrupting "alert" one used when a weapon is held to the throat or
-; the weapon is sharp/bladed.  Idempotent — safe to call every Setup().
-; ================================================================
-Function RegisterWeaponSchemas()
-    String f = "[" + \
-        "{\"name\":\"weapon_type\",\"type\":0,\"required\":true,\"description\":\"Kind of weapon (sword, mace, dagger...)\"}," + \
-        "{\"name\":\"body_part\",\"type\":0,\"required\":true,\"description\":\"Body region the weapon is held against\"}," + \
-        "{\"name\":\"touched\",\"type\":0,\"required\":true,\"description\":\"NPC the weapon is held against\"}," + \
-        "{\"name\":\"toucher\",\"type\":0,\"required\":true,\"description\":\"Person holding the weapon\"}" + \
-        "]"
-    String t = "{" + \
-        "\"recent_events\":\"**{{toucher}}** held a {{weapon_type}} against {{touched}}'s {{body_part}} ({{time_desc}})\"," + \
-        "\"raw\":\"{{toucher}} held a {{weapon_type}} against {{touched}}'s {{body_part}}\"," + \
-        "\"compact\":\"{{toucher}}->{{touched}} ({{weapon_type}})\"," + \
-        "\"verbose\":\"VRTouch weapon: {{toucher}} pressed a {{weapon_type}} to {{touched}}'s {{body_part}}\"" + \
-        "}"
-    ; Non-interrupting: ordinary weapon contact (last bool = interrupt = false).
-    SkyrimNetApi.RegisterEventSchema("vrtouch_weapon", "VRTouch Weapon Contact", \
-        "Player holds a weapon against an NPC's body", f, t, true, 15000, true, false)
-    ; Interrupting alert: throat contact (any weapon) or a sharp weapon
-    ; (last bool = interrupt = true).
-    SkyrimNetApi.RegisterEventSchema("vrtouch_weapon_alert", "VRTouch Weapon Threat", \
-        "Player holds a weapon to an NPC's throat, or a blade against them", f, t, true, 15000, true, true)
-EndFunction
 
 
 
@@ -694,84 +663,6 @@ Function ExitSceneOff()
     VTLog("SCENE ON — mod re-armed (scene ended)")
 EndFunction
 
-; ================================================================
-; Fire trigger to SkyrimNet via YAML trigger system.
-; ================================================================
-Function FireTrigger(Actor akActor, String triggerName, String reaction, Bool interrupting, Bool asThought = False)
-    ; Scene gate: suppress ALL triggers (including interrupting ones)
-    ; while either the NPC or the player is in a SexLab or OStim scene.
-    ; The base mod ships stub gates that always return False; optional
-    ; patches override those stubs to consult the real scene state —
-    ; see VRTouch_SexLabGate.psc and VRTouch_OStimGate.psc.
-    if VRTouch_SexLabGate.IsInScene(akActor) || VRTouch_SexLabGate.IsInScene(playerRef) \
-    || VRTouch_OStimGate.IsInScene(akActor)  || VRTouch_OStimGate.IsInScene(playerRef)
-        VTLog("SUPPRESSED (scene gate): " + triggerName)
-        if EnableDebug || EnableDebugGrab
-            Debug.Notification("VRTouch SUPPRESSED (scene): " + triggerName)
-        EndIf
-        return
-    EndIf
-
-    ; Final per-NPC cooldown check (may have changed since queuing)
-    if !interrupting && IsOnNpcCooldown(akActor)
-        VTLog("SUPPRESSED (cooldown): " + triggerName)
-        if EnableDebug || EnableDebugGrab
-            Debug.Notification("VRTouch SUPPRESSED (cooldown): " + triggerName)
-        EndIf
-        return
-    EndIf
-
-    ; Gag gate: while an NPC is being choked, suppress every trigger
-    ; targeting them EXCEPT the choke-chain triggers themselves (Short /
-    ; Sustained / Severe / Passout).  During a choke the player's hands
-    ; are physically on the NPC and will incidentally brush chest/arms/
-    ; etc — those would otherwise fire touch events and make the
-    ; supposedly-gagged NPC narrate lines.  SkyrimNet's actor blacklist
-    ; faction only blocks *autonomous* LLM; explicit RegisterShortLived-
-    ; Event calls like ours bypass it, so we need this script-side gate.
-    if chokeActive && akActor == chokeActor
-        if StringUtil.Find(triggerName, "VRTouch_Neck_Choke_") != 0
-            VTLog("SUPPRESSED (choke gag): " + triggerName)
-            if EnableDebug || EnableDebugGrab
-                Debug.Notification("VRTouch SUPPRESSED (choked): " + triggerName)
-            EndIf
-            return
-        EndIf
-    EndIf
-
-    ; --- Schema-designated THOUGHT (column 7 = "Though") ---
-    ; Light / incidental / over-armor contact: the NPC just NOTICES it
-    ; internally.  Fire an unvoiced GenerateNPCThought (the reaction text
-    ; becomes the hint) instead of a spoken RegisterShortLivedEvent — it
-    ; colors their later lines without making them blurt something out.
-    ; Still gated by scene / cooldown / choke-gag above.  Self-skips if
-    ; the NPC is unconscious/dead.
-    if asThought
-        SkyrimNetApi.GenerateNPCThought(akActor, reaction)
-        RecordCdFire(akActor)
-        VTLog("THOUGHT " + triggerName + " on " + akActor.GetDisplayName() + " | " + WeaponStateStr())
-        return
-    EndIf
-
-    ; Build structured event data for YAML template variables
-    String npcName   = akActor.GetDisplayName()
-    String plrName   = playerRef.GetDisplayName()
-    String clothName = GetLastArmorName()
-    String d = "{\"trigger_name\":\"" + triggerName + "\"," + \
-               "\"touched\":\"" + npcName + "\"," + \
-               "\"toucher\":\"" + plrName + "\"," + \
-               "\"clothing_name\":\"" + clothName + "\"}"
-
-    String eid = "vrtouch_" + akActor.GetFormID() + "_" + (Utility.GetCurrentRealTime() as Int)
-
-    SkyrimNetApi.RegisterShortLivedEvent(eid, "vrtouch_event", "*" + reaction + "*", d, 15000, akActor, playerRef)
-    RecordCdFire(akActor)
-    VTLog("FIRED " + triggerName + " on " + npcName + " | clothing=" + clothName + " | " + WeaponStateStr())
-
-    if EnableDebug || EnableDebugGrab
-        Debug.Notification("VRTouch FIRED -> " + triggerName)
-    EndIf
-EndFunction
 
 
 
@@ -1047,87 +938,6 @@ Function VTLog(String msg)
     Debug.TraceUser("VRTouchEvents", msg)
 EndFunction
 
-; Player weapon context at the moment of an interaction — the key datum
-; for diagnosing "the NPC reacted to my weapon as if it were my hand".
-String Function WeaponStateStr()
-    String drawn = "sheathed"
-    if playerRef.IsWeaponDrawn()
-        drawn = "DRAWN"
-    EndIf
-    Weapon wr = playerRef.GetEquippedWeapon(False)   ; right hand
-    Weapon wl = playerRef.GetEquippedWeapon(True)    ; left hand
-    String rs = "empty"
-    if wr
-        rs = wr.GetName()
-    EndIf
-    String ls = "empty"
-    if wl
-        ls = wl.GetName()
-    EndIf
-    return "weapons[" + drawn + " R=" + rs + " L=" + ls + "]"
-EndFunction
-
-; ================================================================
-; Per-NPC cooldown helpers
-; ================================================================
-Int Function FindCdSlot(Actor akActor)
-    Int i = 0
-    while i < 16
-        if cdActor[i] == akActor
-            return i
-        EndIf
-        i += 1
-    EndWhile
-    return -1
-EndFunction
-
-; True if akActor has a recorded fire inside the GlobalCooldown window.
-Bool Function IsOnNpcCooldown(Actor akActor)
-    if akActor == None
-        return False
-    EndIf
-    Int idx = FindCdSlot(akActor)
-    if idx < 0
-        return False
-    EndIf
-    return (Utility.GetCurrentRealTime() - cdTime[idx]) < GlobalCooldown
-EndFunction
-
-; Stamp akActor's slot with the current real time.  Overwrites the
-; existing slot, claims an empty one, or evicts the oldest.
-Function RecordCdFire(Actor akActor)
-    if akActor == None
-        return
-    EndIf
-    Float now = Utility.GetCurrentRealTime()
-    Int idx = FindCdSlot(akActor)
-    if idx >= 0
-        cdTime[idx] = now
-        return
-    EndIf
-    Int i = 0
-    while i < 16
-        if cdActor[i] == None
-            cdActor[i] = akActor
-            cdTime[i]  = now
-            return
-        EndIf
-        i += 1
-    EndWhile
-    ; All slots full — evict oldest (lowest cdTime).
-    Int oldestIdx = 0
-    Float oldestTime = cdTime[0]
-    i = 1
-    while i < 16
-        if cdTime[i] < oldestTime
-            oldestTime = cdTime[i]
-            oldestIdx  = i
-        EndIf
-        i += 1
-    EndWhile
-    cdActor[oldestIdx] = akActor
-    cdTime[oldestIdx]  = now
-EndFunction
 
 
 ; ================================================================
@@ -1288,7 +1098,6 @@ Function StartChoke(Actor akActor)
     chokeNextTick       = chokeStartTime + 1.0
     chokeFiredSustained = False
     chokeFiredWitnessed = False
-    chokeFiredThought3  = False
     chokeFiredThought7  = False
     chokeWarnedNoSound  = False
     chokeIsKillRun      = isKillRun
@@ -1578,17 +1387,32 @@ Function EndChokeEx(Bool dispelParalysis, Bool silentCleanup)
                 " gasps raggedly, lungs burning, black spots still flickering at the edges of their vision — throat raw and scorched, each breath a harsh wheeze. They came within a hair's breadth of passing out"
         EndIf
 
-        ; FIX 2 — clear anything still queued from the choke so nothing flushes
-        ; alongside the single release reply (mirrors StartChoke's purge).
+        ; ================================================================
+        ; THE RELEASE IS AN INTERRUPT + DIRECT NARRATION (user spec).
+        ; ================================================================
+        ; Everything from arming to release is a thought — she is being
+        ; strangled and cannot speak.  The release is the moment she CAN,
+        ; and it must land: cut whatever is playing, then force the reply.
+        ;
+        ; It deliberately IGNORES the 15s gate.  A 9-second choke released
+        ; two seconds after some other reaction still gets its gasping
+        ; answer; being choked is not something to be paced out by a
+        ; cooldown.  DirectNarration is a direct call, so no gate is even
+        ; consulted — this comment exists so nobody "fixes" that later.
+        ;
+        ; PurgeDialogue(False) is the blocking interrupt (StartChoke uses
+        ; the same call for the same reason).  It clears the queue AND cuts
+        ; audio mid-playback, which is what makes this an interrupt tier.
         SkyrimNetApi.PurgeDialogue(False)
-        ; FIX 1 — ONE spoken release reaction.  The FireTrigger below is now a
-        ; SILENT thought (5th arg asThought=True): it seeds the release context +
-        ; records the per-NPC cooldown but does NOT speak; the DirectNarration is
-        ; the single voiced gasping reply.  Previously BOTH spoke the SAME text
-        ; (FireTrigger fired a spoken RegisterShortLivedEvent because asThought
-        ; defaulted to False), producing the back-to-back duplicate answers.
-        FireTrigger(a, releaseTrigger, releaseNarr, True, True)
         SkyrimNetApi.DirectNarration(releaseNarr, a, playerRef)
+        ; Stamp BOTH clocks: she has just given a big reaction, so neither
+        ; an ordinary touch nor another intimate one should pile straight on
+        ; top of it.  (Replaces the old FireTrigger(asThought=True) call,
+        ; which recorded the cooldown but ALSO burned her one-per-60s
+        ; SkyrimNet thought budget on text the DirectNarration was already
+        ; speaking — a duplicate that could silence a later fear-thought.)
+        V3RecordFire(a, True)
+        VTLog("CHOKE RELEASE (" + releaseTrigger + ") after " + chokeElapsed + "s on " + npcName2)
     EndIf
 
     chokeActive         = False
@@ -1918,23 +1742,19 @@ Function TickChoke()
             Debug.SendAnimationEvent(a, "painSmall")
         EndIf
 
-        ; --- 3s: first fear-thought (UNVOICED, private to the victim) ---
-        ; A strangled NPC can't speak (gagged), so instead of a spoken line we
-        ; push an internal THOUGHT that builds fear in their mind.  It surfaces
-        ; in their later prompts, so the panic is already loaded when they're
-        ; released and CAN finally react.  GenerateNPCThought is private to the
-        ; thinker and self-skips if they're unconscious.  Backstop: the release
-        ; narration still fires, so even if SkyrimNet's thought-cooldown drops
-        ; this one, fear still lands.
-        if elapsed >= 3.0 && !chokeFiredThought3
-            chokeFiredThought3 = True
-            ; While OFF for a scene we still CONSUME the milestone (so it can't fire
-            ; late, all-at-once, on scene-end) but must NOT leak the thought to
-            ; SkyrimNet — these direct SkyrimNetApi calls bypass FireTrigger's gate.
-            if !modOff
-                SkyrimNetApi.GenerateNPCThought(a, playerRef.GetDisplayName() + "'s hand is locked around your throat right now and it will not let go. You pull at the fingers, you twist, nothing moves them. No air is getting in. Your own pulse is slamming in your ears and a thin, animal panic is climbing up from somewhere you can't control — but you cannot make a single sound, so all of it stays trapped inside you, building.")
-            EndIf
-        EndIf
+        ; ★ THE 3s FEAR-THOUGHT IS DELETED (2026-08-08) — DO NOT RE-ADD.
+        ; SkyrimNet allows ONE thought per NPC per 60 seconds
+        ; (config/NpcThoughts.yaml, perNPCCooldownSeconds: 60), and that
+        ; budget is global — it is NOT in PatchConfig's allowed section list,
+        ; so it cannot be relaxed for the choke at runtime.
+        ;
+        ; With two fear-thoughts in the chain the 3s one always won the race
+        ; and the 7s one was silently discarded, so the escalation never
+        ; reached the LLM at all: the victim's inner state stopped developing
+        ; four seconds into a fifteen-second strangling.  Spending the single
+        ; available thought on the LATER, more desperate line is strictly
+        ; better, and nothing is lost below 7s — a short choke still gets its
+        ; full release narration (Short / Sustained tiers in EndChokeEx).
 
         ; --- 5s milestone: sustained panic response (no LLM fire) ---
         ; We deliberately do NOT FireTrigger here.  A choked NPC cannot
@@ -2022,13 +1842,23 @@ Function TickChoke()
             ; Unblock activation — NPC is on the ground now
             a.BlockActivation(False)
 
-            ; Fire passout narrative event BEFORE StartKOSlot so the
-            ; gag gate (chokeActive && akActor==chokeActor) still
-            ; permits the choke-chain trigger through.
+            ; The passout narration — the LAST event that was still routed
+            ; through the dead trigger path, now a direct call like the rest.
+            ;
+            ; originatorActor is deliberately None: she has just been choked
+            ; unconscious and cannot be the speaker, so SkyrimNet picks an
+            ; appropriate bystander. targetActor None = addressed to everyone
+            ; nearby, which is exactly what the old YAML's `audience:
+            ; everyone` meant. No witness in range simply means silence — a
+            ; private strangling draws no comment, which is correct.
+            ;
+            ; NOT a thought: the thought manager self-skips dead/unconscious/
+            ; sleeping actors, so a thought here would be dropped by
+            ; construction the moment StartKOSlot runs.
             VTLog("CHOKE PASSOUT at elapsed=" + elapsed + "s on " + a.GetDisplayName())
-            FireTrigger(a, "VRTouch_Neck_Choke_Passout", \
+            SkyrimNetApi.DirectNarration( \
                 a.GetDisplayName() + "'s eyes flutter and roll back as the last of their strength gives out — " + \
-                "they go limp in " + playerRef.GetDisplayName() + "'s grasp, unconscious", True)
+                "they go limp in " + playerRef.GetDisplayName() + "'s grasp, unconscious", None, None)
 
             StartKOSlot(a)
 
@@ -2516,9 +2346,45 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
         return
     EndIf
     Bool interrupting = esc || VRTouch_TriggerLib.V3IsInterrupting(key, arm, isGrab)
-    if !interrupting && V3IsOnCooldown(npc)
+    Bool asThought    = VRTouch_TriggerLib.V3IsThought(key, arm, isGrab)
+
+    ; ================================================================
+    ; THE GATE — two clocks, and thoughts are exempt entirely.
+    ; ================================================================
+    ; "Though" rows are NEVER gated by us.  A thought is unvoiced and
+    ; internal, so it cannot talk over anything and does not need pacing
+    ; from this side — and SkyrimNet already throttles them itself
+    ; (config/NpcThoughts.yaml, perNPCCooldownSeconds: 60).  Gating them
+    ; here just meant a touch could be swallowed twice over.
+    ;
+    ; Speak rows consult the NORMAL clock.
+    ; Speak (Interrupt) rows consult the INTIMATE clock ONLY — they cut
+    ; through an ordinary reaction, but never through their own, so
+    ; hammering one breast cannot outrun the LLM's ability to answer.
+    ;
+    ; ★ ESCALATIONS BYPASS EVERY CLOCK (report 16 §16.3 #4: "deeper-than-
+    ; last-fired bypasses the tract cooldown — escalation is new
+    ; information; same-or-shallower respects the cooldown").
+    ; Observed 2026-08-08 11:00:21 before this carve-out existed: the
+    ; opening fired, then `SUPPRESSED (intimate cooldown): uterus` one
+    ; second later — the anti-spam rule had swallowed the ladder, and
+    ; going from brushing the entrance to reaching the womb went unsaid.
+    ;
+    ; This is NOT a spam hole, and the reason is structural rather than a
+    ; tuning judgement: the C++ bridge sets ESC only when the sub-region
+    ; priority STRICTLY EXCEEDS the last one emitted in that session, and
+    ; priority is capped (uterus 100). So a session can escalate at most a
+    ; few times, only ever upward, and never twice at the same depth.
+    ; Repeating the same contact re-emits with esc=0 and is gated normally,
+    ; and a NEW session starts at emittedPriority -1 so its first emit is
+    ; never an escalation.
+    if !asThought && !esc && V3IsOnCooldown(npc, interrupting)
         v3nCooldown += 1
-        VTLog("[V3] SUPPRESSED (cooldown): " + key + " on " + npc.GetDisplayName())
+        String cdWhich = "normal"
+        if interrupting
+            cdWhich = "intimate"
+        EndIf
+        VTLog("[V3] SUPPRESSED (" + cdWhich + " cooldown): " + key + " on " + npc.GetDisplayName())
         return
     EndIf
 
@@ -2526,7 +2392,6 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     String narr = VRTouch_TriggerLib.V3Narration(npc.GetDisplayName(), playerRef.GetDisplayName(), \
         sub1, part1, w1, src1, name1, dist1, dep1, \
         sub2, part2, w2, src2, name2, dist2, dep2, dur)
-    Bool asThought = VRTouch_TriggerLib.V3IsThought(key, arm, isGrab)
     String privStr = "0"
     if VRTouch_TriggerLib.V3IsPrivate(key, arm)
         privStr = "1"
@@ -2552,44 +2417,96 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
             + " | second=" + w2 + "/" + src2 + "/" + part2 \
             + " | skel=" + f[14] + " cloth=" + clothName + " intensity=" + intensity \
             + " | " + narr)
-        V3RecordFire(npc)
+        ; Shadow mode models live pacing, including which clock would be
+        ; stamped — a thought stamps neither (see the live branches).
+        if !asThought
+            V3RecordFire(npc, interrupting)
+        EndIf
         return
     EndIf
 
-    ; --- LIVE dispatch ---
+    ; ================================================================
+    ; --- LIVE dispatch — THE THREE TIERS OF THE SCHEMA SHEET ---
+    ; ================================================================
+    ; `VRTouchEvents Triggers Shema.xlsx`, column "Though/Speak", is the
+    ; specification.  Each of its three values is a DIFFERENT SkyrimNet
+    ; delivery mechanism, and they must not be confused:
+    ;
+    ;   Though (34 rows)  -> GenerateNPCThought.  Unvoiced.  The NPC just
+    ;                        notices; it colours their later lines.
+    ;   Speak  (38 rows)  -> DirectNarration.  They talk about it when
+    ;                        nothing else is happening.
+    ;   Speak (Interrupt) -> DirectNarration, preceded by cutting whatever
+    ;         (30 rows)      they are currently saying, so a hand on a bare
+    ;                        breast is acknowledged NOW, not eventually.
+    ;
+    ; ★ WHY THIS IS A DIRECT CALL AND NOT A TRIGGER (2026-08-08)
+    ; Speak used to be delivered by registering a `vrtouch_contact` event and
+    ; letting the trigger YAML answer it with `response: direct_narration`.
+    ; That is the same end result by a longer road, and the road closed:
+    ; SkyrimNet's TriggerManager stopped evaluating events on this load order.
+    ; Measured 2026-08-08 — 30 triggers loaded from several mods, an event
+    ; type index built, the processing loop started, and then ZERO events
+    ; evaluated in 45 minutes.  Our own event registered fine
+    ; (`SceneContextBuilder: Processed event 'vrtouch_contact'`) and simply
+    ; never reached a trigger.
+    ;
+    ; The tell was that Though kept working while both Speak tiers went
+    ; silent: GenerateNPCThought is a direct API call, and so is the choke's
+    ; DirectNarration — which is exactly why chokes still reacted when
+    ; touches did not.  Calling DirectNarration here restores the sheet's
+    ; behaviour and makes all three tiers independent of TriggerManager.
+    ;
+    ; The audience split is native to the API and replaces what the two
+    ; pass-through YAMLs were emulating:
+    ;   targetActor = the player -> she answers the player  (private)
+    ;   targetActor = None       -> she addresses everyone nearby (public)
     if asThought
+        ; ★ A thought stamps NEITHER clock.  It is transparent to the
+        ; cooldown system in both directions: it is not gated by it (above)
+        ; and it does not consume anyone else's turn.  It is unvoiced and
+        ; internal, so it cannot talk over a Speak — and SkyrimNet's own
+        ; 60s per-NPC thought throttle already paces it.  Letting a thought
+        ; block a later Speak would mean brushing an arm silences a grope.
         v3nThought += 1
         SkyrimNetApi.GenerateNPCThought(npc, narr)
-        V3RecordFire(npc)
         VTLog("[V3] THOUGHT key=" + key + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
     Else
-        ; Free-text fields (names can carry '"' or '\') are JSON-escaped;
-        ; the enum/numeric fields are engine-generated and safe as-is.
-        String d = "{\"narration\":\"" + VRTouch_TriggerLib.V3JsonEscape(narr) + "\"," + \
-                   "\"hand\":\"" + w1 + "\"," + \
-                   "\"part\":\"" + VRTouch_TriggerLib.V3JsonEscape(part1) + "\"," + \
-                   "\"sub\":\"" + sub1 + "\"," + \
-                   "\"source\":\"" + src1 + "\"," + \
-                   "\"source_name\":\"" + VRTouch_TriggerLib.V3JsonEscape(name1) + "\"," + \
-                   "\"duration\":\"" + dur + "\"," + \
-                   "\"depth\":\"" + dep1 + "\"," + \
-                   "\"dist\":\"" + f[6] + "\"," + \
-                   "\"intensity\":\"" + intensity + "\"," + \
-                   "\"clothing_name\":\"" + VRTouch_TriggerLib.V3JsonEscape(clothName) + "\"," + \
-                   "\"second_hand\":\"" + w2 + "\"," + \
-                   "\"second_part\":\"" + VRTouch_TriggerLib.V3JsonEscape(part2) + "\"," + \
-                   "\"second_source\":\"" + src2 + "\"," + \
-                   "\"escalation\":\"" + f[15] + "\"," + \
-                   "\"is_private\":\"" + privStr + "\"}"
-        String eid = "vrtouchv3_" + npc.GetFormID() + "_" + (Utility.GetCurrentRealTime() as Int)
-        SkyrimNetApi.RegisterShortLivedEvent(eid, "vrtouch_contact", "*" + narr + "*", d, 15000, npc, playerRef)
+        ; --- SPEAK (INTERRUPT): cut the line she is saying right now. ---
+        ; TriggerInterruptDialogue is the non-blocking twin of PurgeDialogue
+        ; (StartChoke uses the pair for the same purpose).  `false` = also
+        ; interrupt audio mid-playback rather than letting it finish, which
+        ; is the whole point of the tier.
+        ; ⚠ It is GLOBAL — it clears every actor's queue, not just hers.
+        ; SkyrimNet has no per-actor speech-stop, so a second NPC talking
+        ; nearby also gets cut.  Accepted: this only runs for the 30 sheet
+        ; rows marked "Speak (Interrupt)", all of them intimate contact.
+        String mode = "SPEAK"
+        if interrupting
+            SkyrimNetApi.TriggerInterruptDialogue(false)
+            mode = "SPEAK-INTERRUPT"
+        EndIf
+
+        ; --- SPEAK: force the reaction. ---
+        ; Private -> she answers the player directly.  Public -> she
+        ; addresses everyone nearby.  Both are DirectNarration's own
+        ; targetActor semantics; no trigger, no YAML, no event matching.
+        if privStr == "1"
+            SkyrimNetApi.DirectNarration(narr, npc, playerRef)
+        Else
+            SkyrimNetApi.DirectNarration(narr, npc, None)
+        EndIf
+
         v3nSpoken += 1
-        V3RecordFire(npc)
+        ; An interrupt stamps BOTH clocks; an ordinary Speak stamps only the
+        ; normal one, so intimate contact can still cut in immediately.
+        V3RecordFire(npc, interrupting)
         ; part1 is logged RAW (exactly as PPB sent it) beside the finished
         ; narration.  That one pairing is what makes a casing or naming bug
         ; diagnosable from the user log alone, without cross-referencing the
         ; SKSE bridge log — which truncates on every launch.
-        VTLog("[V3] FIRED key=" + key + " esc=" + f[15] + " priv=" + privStr + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
+        VTLog("[V3] " + mode + " key=" + key + " esc=" + f[15] + " priv=" + privStr \
+            + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
     EndIf
     V3ReportMaybe()
 
@@ -2770,22 +2687,35 @@ EndFunction
 ; RecordCdFire but on V3's OWN arrays, so the shadow run never
 ; disturbs V2's pacing (and vice versa).  Escalations and
 ; V3IsInterrupting keys bypass this check at the call site.
-Bool Function V3IsOnCooldown(Actor a)
-    if a == None || v3CdActor.Length < 16
+; Is this actor gated?  `intimate` picks WHICH clock is consulted:
+;   intimate = False -> the normal clock.  Ordinary contact waits its turn.
+;   intimate = True  -> the INTIMATE clock ONLY.  The normal clock is
+;                       deliberately not read, so an interrupt cuts straight
+;                       through an ordinary reaction — but still cannot spam
+;                       itself.
+Bool Function V3IsOnCooldown(Actor a, Bool intimate = False)
+    if a == None || v3CdActor.Length < 16 || v3CdIntimateTime.Length < 16
         return False
     EndIf
     Int i = 0
     while i < 16
         if v3CdActor[i] == a
-            return (Utility.GetCurrentRealTime() - v3CdTime[i]) < GlobalCooldown
+            Float stamp = v3CdTime[i]
+            if intimate
+                stamp = v3CdIntimateTime[i]
+            EndIf
+            return (Utility.GetCurrentRealTime() - stamp) < GlobalCooldown
         EndIf
         i += 1
     EndWhile
     return False
 EndFunction
 
-Function V3RecordFire(Actor a)
-    if a == None || v3CdActor.Length < 16
+; Stamp the clocks after a fire.  An interrupt stamps BOTH (she has just
+; reacted, so an ordinary touch must not pile on); an ordinary fire stamps
+; only the normal clock, leaving intimate contact free to cut in at once.
+Function V3RecordFire(Actor a, Bool intimate = False)
+    if a == None || v3CdActor.Length < 16 || v3CdIntimateTime.Length < 16
         return
     EndIf
     Float now = Utility.GetCurrentRealTime()
@@ -2793,6 +2723,9 @@ Function V3RecordFire(Actor a)
     while i < 16
         if v3CdActor[i] == a
             v3CdTime[i] = now
+            if intimate
+                v3CdIntimateTime[i] = now
+            EndIf
             return
         EndIf
         i += 1
@@ -2802,6 +2735,14 @@ Function V3RecordFire(Actor a)
         if v3CdActor[i] == None
             v3CdActor[i] = a
             v3CdTime[i]  = now
+            ; A fresh slot must NOT inherit a zeroed intimate clock as
+            ; "15s ago" — 0.0 reads as long-expired, which is correct for a
+            ; non-intimate fire and is overwritten immediately for an
+            ; intimate one.
+            v3CdIntimateTime[i] = 0.0
+            if intimate
+                v3CdIntimateTime[i] = now
+            EndIf
             return
         EndIf
         i += 1
@@ -2817,6 +2758,10 @@ Function V3RecordFire(Actor a)
         EndIf
         i += 1
     EndWhile
-    v3CdActor[oldestIdx] = a
-    v3CdTime[oldestIdx]  = now
+    v3CdActor[oldestIdx]        = a
+    v3CdTime[oldestIdx]         = now
+    v3CdIntimateTime[oldestIdx] = 0.0
+    if intimate
+        v3CdIntimateTime[oldestIdx] = now
+    EndIf
 EndFunction
