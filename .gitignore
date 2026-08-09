@@ -6,7 +6,7 @@ plugin/out/
 # Compiled Papyrus — built from scripts/*.psc with Caprica or the CK compiler
 *.pex
 
-# Binary release artifacts — these live on the Releases page / Nexus, not in git
+# Binary release artifacts — these are attached to GitHub Releases, not tracked in git
 *.dll
 *.esp
 *.esm
