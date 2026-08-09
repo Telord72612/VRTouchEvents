@@ -206,9 +206,15 @@ building their own mod on the same API. Includes the mistakes that cost the most
 deadlock, digest-vs-raw, the per-region handover that shreds a continuous touch, and the several
 ways PPB can go silent with no error.
 
-Compiled artifacts (`.dll`, `.pex`, the packed FOMOD) are not in git — get them from the Nexus
-release. Build the plugin with `plugin/build.bat`; compile the Papyrus with Caprica or the CK
-compiler against SkyrimNet, HIGGS, OSL Aroused and Mfg Fix.
+### Installing
+
+**Download the packed FOMOD from [Releases](https://github.com/Telord72612/VRTouchEvents/releases)**
+— that is the installer, and this repository is the only place it is published. Install it like any
+other mod (MO2 or Vortex will read the FOMOD).
+
+Compiled artifacts (`.dll`, `.pex`) are deliberately not tracked in git — they live on the Releases
+page. To build from source: `plugin/build.bat` for the SKSE plugin, and Caprica or the CK compiler
+for the Papyrus, against SkyrimNet, HIGGS, OSL Aroused and Mfg Fix.
 
 ## License
 
