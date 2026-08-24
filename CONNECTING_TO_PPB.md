@@ -3,7 +3,11 @@
 This is the part most people come here for, so it gets its own document. It is written for
 somebody building a **different** mod on top of PPB, not just for reading this one.
 
-Everything here is as-built and running — not a design sketch. The relevant files:
+Everything here is as-built and running — not a design sketch. **Updated for PPB 2.0.0
+(build 20000) and VRTouchEvents V3.2** — if you integrated against 1.4.x, sections 2b, 6, 8 and 9
+all changed.
+
+The relevant files:
 
 | file | what it is |
 |---|---|
@@ -74,6 +78,29 @@ if (phase == PPBAPI::kPhaseStart)      ++session.liveDigest[wand];
 else if (phase == PPBAPI::kPhaseEnd)   --session.liveDigest[wand];
 ```
 
+### ⚠⚠ The same rule, violated one branch away — and it cost the most of anything here
+
+We wrote "never let raw decide that a touch has ended" above, implemented it in the wand-clearing
+path, **and then wrote a second teardown fifteen lines below that did exactly what the rule
+forbids.**
+
+A session is created by a digest `Start`. The raw snapshot lags a frame, so immediately after
+creation there is legitimately no raw entry — and our sweep read that as "nothing here" and destroyed
+the session on its very first tick:
+
+```
+End with NO raw contact ever merged | liveDigest=[1,0] sweeps-since-open=1 age=0.00s
+```
+
+Ten of those in one session, while the digest was still saying a hand was on her. **Short touches
+died outright; long ones survived only by luck**, when a later digest `Start` happened to arrive
+after raw had caught up. It presented as flaky detection in PPB and was ours for months.
+
+★ **If any branch of your code refuses to trust the lagging signal, EVERY branch that ends the same
+object must refuse it too.** Otherwise the teardown wins and the check above it is decoration. Give
+raw a grace period — two seconds is generous and costs nothing — before concluding anything from its
+absence.
+
 ### ⚠ And then the trap: the digest is per-REGION
 
 A wandering touch legitimately produces `End(regionA)` → ~0.26 s gap → `Start(regionB)` with the
@@ -118,6 +145,21 @@ its sweep emitted fine and the game ran on; the one that stayed *active* froze. 
 `SendEvent` — the only divergence was downstream of the last log line. **Read the control flow after
 the last thing logged, not the line itself.**
 
+### ⚠ The rule is wider than `AddTask`: do not re-enter the frame owner either
+
+`AddTask` is the sharp edge, but the general shape is **anything that calls back into whatever owns
+the frame you are running inside.** Our contact handling lives inside HIGGS's frame update, and we
+later hung the game a second way: unequipping an item and immediately asking HIGGS to grab it, at the
+exact moment HIGGS was tearing down a grab on that same hand.
+
+No crash log, no exception — the log simply stops mid-gesture, one line after the last thing that
+worked.
+
+**Defer engine calls that mutate inventory or equipment by one frame**, into your own pending-work
+struct that a later tick drains. It costs a frame and removes an entire class of hang. (Deferring
+via `AddTask` is exactly the thing that freezes, so this must be your own struct, not the task
+queue.)
+
 ## 5. Loads and cell changes: guard them yourself
 
 PPB drops live contacts on load without emitting `End` (deliberately — "no End events across a
@@ -135,9 +177,22 @@ no information, so dropping it silently costs nothing.
 
 ## 6. Coverage — read this before you ship
 
-**PPB drives female NPCs of mapped races only** (the human catch-all, which covers elves, orcs and
-most custom races, plus Argonian, Khajiit, Draenei, plus user-added races). Males, children and
-creatures answer `IsDriven() == false` and never appear in the stream.
+> ⚠ **THIS SECTION CHANGED IN PPB 2.0.0.** If you read an older copy of this document: males are
+> now driven. Do not ship the old assumption.
+
+**PPB drives mapped races** — the human catch-all (which covers elves, orcs and most custom races),
+plus Argonian, Khajiit, Draenei, plus user-added races. **Males are covered as of 2.0.0**; children
+and creatures answer `IsDriven() == false` and never appear in the stream.
+
+★ **Feature-detect on `GetBuildNumber()`, not on behaviour.** `>= 20000` is 2.0.0. And design so that
+a coverage expansion upstream is a *content* decision for you rather than a code change:
+VRTouchEvents has no per-race or per-sex logic of its own, so when PPB started driving males the only
+work on our side was deciding what the new contacts should mean.
+
+⚠ **A contact does not carry a sex field.** Resolve it yourself if you need it, once per dispatch.
+And be aware that some stamped fields were derived from the female map on male bodies in early 2.0.0
+builds — we defend by matching capsule **names** on males rather than trusting the classification
+fields. Check the current behaviour before relying on those fields for a male.
 
 **Never read absence of an event as absence of a touch.** Several host-side conditions produce total
 silence with no error at all:
@@ -169,6 +224,85 @@ We layer a 1-second coalescer window on top, and only then a per-body-part delay
 side does not use a timer for that delay at all: an unmet delay parks the actor in a pending ring and
 the next `ContactUpdate` re-tests it with a freshly *measured* duration. That is strictly better than
 a deadline, and it costs zero `OnUpdate` wakeups when nobody is being touched.
+
+## 8. ★ Priority and arbitration are YOURS
+
+PPB answers exactly one question: *a contact happened, here, with this, this deep, for this long.*
+Everything after that — which contact matters when two arrive at once, how long one must last to be
+worth acting on, whether it outranks another — is the consumer's judgement. Write it in your own
+code, where you can change it without waiting on anyone.
+
+The user this mod was built for put it better than we did:
+
+> *"Priority is our business. PPB reports touch, we decide which one is priority. If PPB reports
+> clitoris .25 sec 20 times because the finger is shaking, it's a touch and we make it the
+> priority."*
+
+That second sentence is also a design brief: **fragmentation must not be able to demote a contact.**
+Twenty quarter-second fragments of one touch are one touch. Our session only retires after a real gap
+of silence and keeps the highest priority seen inside the window, so a shaking finger cannot downgrade
+itself.
+
+## 9. ⚠ An upstream verdict answers its own question, not yours
+
+PPB's orifice sensor tells you whether something is *inside an opening*, and it is right about that.
+We consumed it as though it answered *"what is this object being placed on"*, which it does not.
+
+A large held object overlaps interior sensors as well as the surface capsule it is really touching —
+so the moment PPB called one of those an orifice, our contact collapsed to `mouth`-only or
+`vaginal`-only, and anything wanting a different site was refused. A blindfold brought to the face
+became a mouth contact. An armbinder held at the wrist became an anal one.
+
+**Take a specific verdict only when its question is the one you are asking.**
+
+⚠ And when you fix something like this, **check whether a second path reaches the same wrong
+answer.** We fixed the orifice verdict and left an equivalent child-index map untouched a few lines
+below, so the bug survived its own fix and returned the next day wearing a chastity belt.
+
+## 10. ⚠ Fields that are meaningless for your source
+
+`wand` is the player's hand — `0` right, `1` left. **It is meaningless for any source that is not a
+hand**, and it reads `0`. We published every player-genital contact as coming from the right hand for
+a full session because `wand` was read unconditionally. **Switch on `sourceKind`, never on `wand`**,
+and give non-hand sources their own identity downstream rather than letting them inherit a lie.
+
+Related: a source reporting `wand = 0` **occupies the same slot as the right hand** in any
+two-slot-per-actor model. If both are live on one actor, one loses. That arbitration is yours to
+design (see section 8), not a PPB bug.
+
+**And zero often means "no longer known", not "unchanged".** The erection level in `_reserved[0]` is
+written on *every* contact including the zero — a `0` mid-stream means PPB no longer knows. We only
+harvested it when non-zero, so once cached it stuck, and we would have narrated a stale state
+indefinitely. Assume the same shape for any future field arriving in a reserved byte: **write what
+you are told, including the absence.**
+
+## 11. When you think it is PPB
+
+Twice we were certain. Once we were right.
+
+**Right:** the male genital chain was genuinely unreachable — a loop bound made one branch
+unreachable unless you also enabled hair targeting, which the header separately warns against. Filed
+with the file, the line, the one-line fix, and evidence our side was already wired and waiting.
+**Fixed the same day.**
+
+**Wrong:** the short-touch failures were our own raw-lag race (section 3), and a confident three-session
+theory that "the shaft loses the nearest-capsule race" was a wrong inference from two true
+observations — PPB's bend-level logging climbed while the touch API stayed silent, because one uses a
+radius test on the rig and the other uses a scan that did not include the rig. **A signal from one
+subsystem does not prove another saw the same thing.**
+
+What settled both was the same discipline: **instrument the silent path first.** Our `p < 0`
+early-return was commented *"shouldn't happen"* and returned without a word. One log line there
+separated *"PPB never sent it"* from *"we never looked"* — and answered both questions on the next
+run, one of them against us.
+
+★ **A silent early-return marked "shouldn't happen" is a bug you cannot diagnose.** Log every path
+that discards data, at your default level.
+
+**What made our PPB reports cheap to act on:** the file and line rather than the symptom; evidence the
+consumer side was already correct; the proposed one-line change and why the surrounding code already
+supported it; and an explicit statement of what we were **not** asking for — in that case, that we
+were not asking PPB to re-rank anything, only to scan a chain at all.
 
 ---
 

@@ -1,5 +1,79 @@
 # Changelog
 
+## V3.2 — 2026-08-24
+
+### Males are covered
+
+Chest contact never interrupts, whatever the dress state. Genital contact is reported with erection
+state and position — *"brushing against his soft penis at the middle"* — and never interrupts either.
+Male orifices are matched by capsule **name** rather than by the classification fields, so they are
+never read through the female map.
+
+This needed no per-sex logic here. PPB 2.0.0 started driving male bodies and the existing routing
+handled them; the only work was deciding what the new contacts should mean. Requires PPB 2.0.0
+(build 20000) or later.
+
+### The choke is a throat hold again
+
+It arms only on the **front** of the neck. A grab on the nape narrates as a neck hold and starts
+nothing. Previously someone could be strangled from behind by a hand on the back of their neck.
+
+### A fourth delivery tier: persistent events
+
+Quiet contact is now *remembered* rather than announced — the NPC can raise it later without the
+moment itself interrupting anyone.
+
+| tier | V3.1 | V3.2 |
+|---|---|---|
+| Speak (Interrupt) | 30 | ~16 |
+| Speak | 38 | ~52 |
+| Though | 34 | ~9 |
+| **Persistent** | — | **~26** |
+
+Armoured and casual contact moved to the new tier and many old interrupts became plain speech, so
+only genuinely intrusive contact still cuts the room off.
+
+### Scene suppression rebuilt
+
+It now listens for the scene **start and end events** that OStim and SexLab broadcast, instead of
+only asking whether an actor is in an animating faction.
+
+A faction is set by a script partway through a scene's own startup — so there was a window where the
+scene was running and the flag was not set yet, which is exactly when a touch was most likely to be
+narrated over the top of it. An interrupted teardown could also leave it set afterwards.
+
+The old per-actor checks are kept and OR-ed with the new signal, because the failure being fixed was
+scenes **not** being suppressed; removing a signal could only make that worse. A 20-minute expiry
+covers an `end` event that never arrives.
+
+**The events reach the base install, so scene suppression now works without either optional patch.**
+The patches remain worth installing — they add a per-actor check that catches a scene whose end event
+was missed.
+
+### ⛔ Short touches were being destroyed — a bug that predates V3.0
+
+A race between PPB's two data streams. A session is created by the digest, but populated from the raw
+snapshot, which lags a frame — so immediately after creation there is legitimately no raw entry, and
+the sweep read that as "the contact is over" and destroyed the session on its first tick, while the
+digest still said a hand was on the actor.
+
+**Short touches died outright; long ones survived only by luck.** Ten kills in a single measured
+session. If touch has ever felt unreliable rather than *absent*, this was why.
+
+`CONNECTING_TO_PPB.md` section 3 has the mechanism and the rule that prevents it, for anyone building
+their own PPB consumer.
+
+### Also
+
+- The player's own genitals are a valid touch source, gated by PPB's exposure check.
+- Under-jaw contact no longer scores high enough to bypass both cooldown clocks (it maps to *face*).
+- A genital-source contact carries a priority floor so it cannot be silently evicted by an idle hand
+  elsewhere on the same actor.
+- `CONNECTING_TO_PPB.md` substantially expanded: priority and arbitration, upstream verdicts that
+  answer their own question, fields that are meaningless for your source, and the frame-callback
+  re-entrancy rule that goes wider than `AddTask`.
+
+
 ## V3.1 — 2026-08-08
 
 ### ⚠ If you are on V3.0, most spoken reactions are silent. This release fixes that.

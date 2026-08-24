@@ -11,225 +11,7 @@
 ;
 Scriptname VRTouch_TriggerLib
 
-; ================================================================
-; Trigger Name
-; Returns "" if no trigger exists for the combination.
-; ================================================================
-String Function GetTriggerName(String bp, Bool isGrab, Int arm) Global
-    ; --- Head ---
-    if bp == "head"
-        String hSuffix = ArmorSuffix3(arm)
-        if isGrab
-            return "VRTouch_Head_Grab_" + hSuffix
-        EndIf
-        return "VRTouch_Head_Touch_" + hSuffix
-    EndIf
 
-    ; --- Face Hold (head grab + face marker) ---
-    if bp == "face_hold"
-        if !isGrab
-            return ""
-        EndIf
-        if arm == 0
-            return "VRTouch_FaceHold_Grab_Bare"
-        EndIf
-        return "VRTouch_FaceHold_Grab_Mask"
-    EndIf
-
-    ; --- Face ---
-    if bp == "face"
-        if isGrab
-            return ""
-        EndIf
-        if arm == 0
-            return "VRTouch_Face_Touch_Bare"
-        EndIf
-        return "VRTouch_Face_Touch_Mask"
-    EndIf
-
-    ; --- Hands (grab only, all state) ---
-    if bp == "hands"
-        if isGrab
-            return "VRTouch_Hand_Grab_AllState"
-        EndIf
-        return ""
-    EndIf
-
-    ; --- Arms (all state) ---
-    if bp == "arms"
-        if isGrab
-            return "VRTouch_Arm_Grab_AllState"
-        EndIf
-        return "VRTouch_Arm_Touch_AllState"
-    EndIf
-
-    ; --- Feet ---
-    if bp == "feet"
-        if isGrab
-            if arm == 0
-                return "VRTouch_Foot_Grab_Bare"
-            EndIf
-            return "VRTouch_Foot_Grab_AllState"
-        EndIf
-        if arm == 0
-            return "VRTouch_Foot_Touch_Bare"
-        EndIf
-        return "VRTouch_Foot_Touch_AllState"
-    EndIf
-
-    ; --- Legs ---
-    if bp == "legs"
-        String lSuffix = ArmorSuffix3(arm)
-        if isGrab
-            return "VRTouch_Leg_Grab_" + lSuffix
-        EndIf
-        return "VRTouch_Leg_Touch_" + lSuffix
-    EndIf
-
-    ; --- Breasts (sided: bare/clothes; generic: armor) ---
-    if bp == "left_breast" || bp == "right_breast"
-        String side = "LeftBreast"
-        if bp == "right_breast"
-            side = "RightBreast"
-        EndIf
-        if arm == 0
-            if isGrab
-                return "VRTouch_" + side + "_Grab_Bare"
-            EndIf
-            return "VRTouch_" + side + "_Touch_Bare"
-        ElseIf arm == 1
-            if isGrab
-                return "VRTouch_" + side + "_Grab_Clothes"
-            EndIf
-            return "VRTouch_" + side + "_Touch_Clothes"
-        ElseIf arm == 2
-            if isGrab
-                return "VRTouch_Breast_Grab_LArmor"
-            EndIf
-            return "VRTouch_Breast_Touch_LArmor"
-        Else
-            if isGrab
-                return "VRTouch_Breast_Grab_HArmor"
-            EndIf
-            return "VRTouch_Breast_Touch_HArmor"
-        EndIf
-    EndIf
-
-    ; --- Chest (touch only) ---
-    if bp == "chest"
-        if isGrab
-            return ""
-        EndIf
-        return "VRTouch_Chest_Touch_" + ArmorSuffix3(arm)
-    EndIf
-
-    ; --- Upper Back ---
-    if bp == "upper_back"
-        String ubSuffix = "Bare"
-        if arm == 1
-            ubSuffix = "Clothes"
-        ElseIf arm == 2
-            ubSuffix = "LArmor"
-        ElseIf arm == 3
-            ubSuffix = "HArmor"
-        EndIf
-        if isGrab
-            return "VRTouch_UpperBack_Grab_" + ubSuffix
-        EndIf
-        return "VRTouch_UpperBack_Touch_" + ubSuffix
-    EndIf
-
-    ; --- Belly ---
-    if bp == "belly"
-        String bSuffix = ArmorSuffix4(arm)
-        if isGrab
-            return "VRTouch_Belly_Grab_" + bSuffix
-        EndIf
-        return "VRTouch_Belly_Touch_" + bSuffix
-    EndIf
-
-    ; --- Lower Back ---
-    if bp == "lower_back"
-        if isGrab
-            ; Grab: bare, clothes, armor (L+H combined)
-            if arm == 0
-                return "VRTouch_LowerBack_Grab_Bare"
-            ElseIf arm == 1
-                return "VRTouch_LowerBack_Grab_Clothes"
-            EndIf
-            return "VRTouch_LowerBack_Grab_Armor"
-        EndIf
-        ; Touch: bare, clothes, larmor, harmor
-        if arm == 0
-            return "VRTouch_LowerBack_Touch_Bare"
-        ElseIf arm == 1
-            return "VRTouch_LowerBack_Touch_Clothes"
-        ElseIf arm == 2
-            return "VRTouch_LowerBack_Touch_LArmor"
-        EndIf
-        return "VRTouch_LowerBack_Touch_HArmor"
-    EndIf
-
-    ; --- Genitals ---
-    if bp == "genitals"
-        String gSuffix = ArmorSuffix3(arm)
-        if isGrab
-            return "VRTouch_Genitals_Grab_" + gSuffix
-        EndIf
-        return "VRTouch_Genitals_Touch_" + gSuffix
-    EndIf
-
-    ; --- Butt ---
-    if bp == "butt"
-        if isGrab
-            if arm == 0
-                return "VRTouch_Butt_Grab_Bare"
-            ElseIf arm == 1
-                return "VRTouch_Butt_Grab_Clothes"
-            EndIf
-            return "VRTouch_Butt_Grab_Armor"
-        EndIf
-        return "VRTouch_Butt_Touch_" + ArmorSuffix4(arm)
-    EndIf
-
-    ; --- Tail (touch only, no armor) ---
-    if bp == "tail_base"
-        if isGrab
-            return ""
-        EndIf
-        return "VRTouch_TailBase_Touch"
-    EndIf
-    if bp == "tail_tip"
-        if isGrab
-            return ""
-        EndIf
-        return "VRTouch_TailTip_Touch"
-    EndIf
-
-    return ""
-EndFunction
-
-; Helper: Bare / Clothes / Armor  (3 states — L and H combined)
-String Function ArmorSuffix3(Int arm) Global
-    if arm == 0
-        return "Bare"
-    ElseIf arm == 1
-        return "Clothes"
-    EndIf
-    return "Armor"
-EndFunction
-
-; Helper: Bare / Clothes / LArmor / HArmor  (4 states)
-String Function ArmorSuffix4(Int arm) Global
-    if arm == 0
-        return "Bare"
-    ElseIf arm == 1
-        return "Clothes"
-    ElseIf arm == 2
-        return "LArmor"
-    EndIf
-    return "HArmor"
-EndFunction
 
 ; ================================================================
 ; Delay (seconds) — base values from trigger schema
@@ -407,15 +189,27 @@ EndFunction
 ; isGrab is retained in the signature (callers still pass it) but
 ; is no longer read — both touch and grab interrupt.
 ; ================================================================
+; ★ REWORKED 2026-08-23 (user): "Turn a lot of the lesser interrupt into
+; directNarration, except the really intrusive one like intimate touch."
+; TriggerInterruptDialogue is GLOBAL (cuts every actor's queue), so every
+; demotion here directly reduces collateral.  What still interrupts:
+;   - genitals BARE (touch or grab) — reaching between bare legs.
+;   - breast GRAB, BARE only — a hand closing on a naked breast.
+;   - the intimate ladder (V3IsLadderKey, handled upstream) — unchanged.
+; Demoted to plain Speak: breast TOUCH (bare/clothed), breast grab through
+; clothes, genitals through clothes/armor, and ALL butt rows.  isGrab is
+; read again as of this rework.
 Bool Function IsInterrupting(String bp, Bool isGrab, Int arm) Global
     if bp == "genitals"
-        return True
+        return arm == 0
     EndIf
-    if arm > 1
-        return False
-    EndIf
-    if bp == "left_breast" || bp == "right_breast" || bp == "butt"
-        return True
+    ; ★ BREAST LADDER (user, 2026-08-23), stated exactly:
+    ;   naked  -> "clearly an interrupt"   (touch OR grab — not grab-only)
+    ;   clothes / light armor -> DirectNarration (plain Speak)
+    ;   heavy armor -> "just an event"     (Persistent — see V3IsPersistent)
+    ; Male chest never reaches here: V3MapKey routes male pecs to "chest".
+    if bp == "left_breast" || bp == "right_breast"
+        return arm == 0
     EndIf
     return False
 EndFunction
@@ -447,27 +241,6 @@ Int Function GetSlotMask(String bp) Global
     return 4
 EndFunction
 
-; ================================================================
-; Region (for grab-supersede-touch matching)
-; ================================================================
-String Function GetRegion(String bp) Global
-    if bp == "head" || bp == "face" || bp == "face_hold"
-        return "head"
-    EndIf
-    if bp == "left_breast" || bp == "right_breast" || bp == "chest" || bp == "upper_back"
-        return "chest"
-    EndIf
-    if bp == "belly" || bp == "lower_back"
-        return "belly"
-    EndIf
-    if bp == "genitals" || bp == "butt"
-        return "pelvis"
-    EndIf
-    if bp == "tail_base" || bp == "tail_tip"
-        return "tail"
-    EndIf
-    return bp
-EndFunction
 
 ; ================================================================
 ; Baseline arousal change per trigger (from the VRTouchEvents schema).
@@ -528,245 +301,6 @@ Float Function GetArousal(String bp, Bool isGrab, Int arm) Global
     return 0.0
 EndFunction
 
-; ================================================================
-; Reaction Text
-; n = NPC name, p = player name, a = armor/clothing name
-; ================================================================
-String Function GetReaction(String bp, Bool isGrab, Int arm, String n, String p, String a) Global
-    ; --- HEAD ---
-    if bp == "head"
-        if !isGrab
-            if arm <= 1
-                return n + " feels " + p + "'s hand patting their head"
-            EndIf
-            return n + " feels " + p + "'s hand touching their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand grabbing their hair or head"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand grabbing their hair or hat"
-        EndIf
-        return n + " feels " + p + "'s hand grabbing their " + a
-    EndIf
-
-    ; --- FACE HOLD ---
-    if bp == "face_hold"
-        if arm == 0
-            return n + " feels " + p + "'s hand holding their face"
-        EndIf
-        return n + " feels " + p + "'s hand holding their " + a
-    EndIf
-
-    ; --- FACE ---
-    if bp == "face"
-        if arm == 0
-            return n + " feels " + p + "'s hand sliding along their face"
-        EndIf
-        return n + " feels " + p + "'s hand sliding along their " + a
-    EndIf
-
-    ; --- HANDS ---
-    if bp == "hands"
-        return p + " grabs " + n + " by the hand"
-    EndIf
-
-    ; --- ARMS ---
-    if bp == "arms"
-        if isGrab
-            return n + " feels " + p + "'s hand grabbing them by the arm"
-        EndIf
-        return n + " feels " + p + "'s hand resting on their arm"
-    EndIf
-
-    ; --- FEET ---
-    if bp == "feet"
-        if isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand grabbing their foot"
-            EndIf
-            return n + " feels " + p + "'s hand grabbing their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand touching their foot"
-        EndIf
-        return n + " feels " + p + "'s hand touching their " + a
-    EndIf
-
-    ; --- LEGS ---
-    if bp == "legs"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand sliding along their naked leg"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand along their leg over their " + a
-            EndIf
-            return n + " can see " + p + "'s hand resting on their " + a + " on their leg"
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand grabbing their naked leg"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand grabbing their leg over their " + a
-        EndIf
-        return n + " feels " + p + "'s hand grabbing their " + a + " on their leg"
-    EndIf
-
-    ; --- LEFT BREAST ---
-    if bp == "left_breast"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand resting on their naked left breast"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand resting on their left breast through their clothes"
-            ElseIf arm == 2
-                return n + " feels " + p + "'s hand resting on their breast over their " + a
-            EndIf
-            return n + " can see " + p + "'s hand resting on their chest over their " + a
-        EndIf
-        ; Grab
-        if arm == 0
-            return n + " feels " + p + "'s hand on their naked left breast and squeezing it"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand grabbing their left breast through their clothes"
-        ElseIf arm == 2
-            return n + " feels " + p + "'s hand grabbing their breast over their " + a
-        EndIf
-        return n + " can see " + p + "'s hand grabbing their " + a + " over their chest"
-    EndIf
-
-    ; --- RIGHT BREAST ---
-    if bp == "right_breast"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand resting on their naked right breast"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand resting on their right breast through their clothes"
-            ElseIf arm == 2
-                return n + " feels " + p + "'s hand resting on their breast over their " + a
-            EndIf
-            return n + " can see " + p + "'s hand resting on their chest over their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand on their naked right breast and squeezing it"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand grabbing their right breast through their clothes"
-        ElseIf arm == 2
-            return n + " feels " + p + "'s hand grabbing their breast over their " + a
-        EndIf
-        return n + " can see " + p + "'s hand grabbing their " + a + " over their chest"
-    EndIf
-
-    ; --- CHEST ---
-    if bp == "chest"
-        if arm == 0
-            return n + " feels " + p + "'s hand resting on their naked chest"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand resting on their chest through their clothes"
-        EndIf
-        return n + " sees " + p + "'s hand resting on their chest over their " + a
-    EndIf
-
-    ; --- UPPER BACK ---
-    if bp == "upper_back"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand resting on their naked upper back"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand resting on their upper back through their clothes"
-            EndIf
-            return n + " feels " + p + "'s hand resting on their upper back over their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand holding on their naked upper back"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand holding on their upper back through their clothes"
-        EndIf
-        return n + " feels " + p + "'s hand grabbing their " + a + " on their upper back"
-    EndIf
-
-    ; --- BELLY ---
-    if bp == "belly"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand resting on their naked belly"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand resting on their belly through their clothes"
-            EndIf
-            return n + " feels " + p + "'s hand resting on front of their " + a + " at their navel"
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand holding on their naked belly"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand holding on their belly through their clothes"
-        EndIf
-        return n + " feels " + p + "'s hand grabbing on front of their " + a + " at their navel"
-    EndIf
-
-    ; --- LOWER BACK ---
-    if bp == "lower_back"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand resting on their naked lower back"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand resting on their lower back through their clothes"
-            EndIf
-            return n + " feels " + p + "'s hand resting on back of their " + a + " at the lower back"
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand holding on their naked lower back"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand holding on their lower back through their clothes"
-        EndIf
-        return n + " feels " + p + "'s hand grabbing on back of their " + a + " at the lower back"
-    EndIf
-
-    ; --- GENITALS ---
-    if bp == "genitals"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand reaching between their legs and touching their private parts"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand reaching between their legs and caressing their private parts over their pants"
-            EndIf
-            return n + " feels " + p + "'s hand reaching between their legs and caressing their private parts over their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand reaching between their legs and their finger penetrating their private parts"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand reaching between their legs and rubbing their private parts over their pants"
-        EndIf
-        return n + " feels " + p + "'s hand reaching between their legs and grabbing their " + a + " over their private parts"
-    EndIf
-
-    ; --- BUTT ---
-    if bp == "butt"
-        if !isGrab
-            if arm == 0
-                return n + " feels " + p + "'s hand on their naked butt"
-            ElseIf arm == 1
-                return n + " feels " + p + "'s hand on their butt through their clothes"
-            ElseIf arm == 2
-                return n + " feels " + p + "'s hand resting on their butt over their " + a
-            EndIf
-            return n + " can feel " + p + "'s hand resting on their butt over their " + a
-        EndIf
-        if arm == 0
-            return n + " feels " + p + "'s hand grabbing their naked butt cheek"
-        ElseIf arm == 1
-            return n + " feels " + p + "'s hand grabbing their butt cheek through their clothes"
-        EndIf
-        return n + " feels " + p + "'s hand grabbing their " + a + " over their butt"
-    EndIf
-
-    ; --- TAIL ---
-    if bp == "tail_base"
-        return n + " feels " + p + "'s hand brushing against the base of their tail"
-    EndIf
-    if bp == "tail_tip"
-        return n + " feels " + p + "'s hand brushing against the tip of their tail"
-    EndIf
-
-    return ""
-EndFunction
 
 ; ================================================================
 ; Though vs Speak (schema column 7).
@@ -855,7 +389,7 @@ Bool Function V3IsV3Key(String key) Global
         || key == "uterus" || key == "anal" || key == "anal_deep" \
         || key == "lips" || key == "mouth" || key == "mouth_wall" \
         || key == "neck" || key == "ear" || key == "shoulder" \
-        || key == "waist" || key == "hips"
+        || key == "waist" || key == "hips" || key == "male_genitals"
 EndFunction
 
 ; True for the intimate/orifice ladder keys (always Speak + Interrupt).
@@ -869,7 +403,59 @@ EndFunction
 ; V3MapKey — PPB (sub-region name, capsule name) -> V3 body-part key.
 ; Returns "" for unmapped/hair contacts (caller drops them).
 ; ================================================================
-String Function V3MapKey(String sub, String part) Global
+String Function V3MapKey(String sub, String part, Int isMale = 0) Global
+    ; ================================================================
+    ; ★ MALE UPDATE (2026-08-23) — male intercepts run FIRST.
+    ;
+    ; The shaft chords are proof by existence (only TNG males carry the
+    ; GEN rig, PPB slot 102), so they need no sex test.  Everything else
+    ; DOES: PPB stamps male contacts with the FEMALE (slot,child) sub-
+    ; region map (StampClass has no isMale — PpbApi.cpp:464), so a male
+    ; anal capsule arrives labelled "Intimate - vaginal (opening)" and a
+    ; male pec arrives as sub "Breast".  Only the capsule NAME is sex-
+    ; correct on male COM (MalePartNameOverride).  The PPB handoff
+    ; request (report 24) asks for the stamp fix; until then the NAME is
+    ; the truth on males and the sub label is a lie.
+    ; ================================================================
+    if part == "shaft (base)" || part == "shaft (lower)" \
+        || part == "shaft (upper)" || part == "shaft (tip)" || part == "shaft"
+        return "male_genitals"
+    EndIf
+    if isMale
+        ; Male pecs report "BREAST R/L" under sub "Breast" (shared spine2
+        ; table).  On a man that is CHEST — never the breast keys, which
+        ; interrupt and arouse.  This single mapping IS the user's "male
+        ; chest is never an interrupt, whatever dress state" rule: the
+        ; chest key has no interrupt row at any armor state.
+        if sub == "Breast"
+            return "chest"
+        EndIf
+        ; Male COM capsules, matched by their sex-correct NAMES:
+        if part == "anus R" || part == "anus L"
+            return "anal"
+        EndIf
+        if part == "rectum R" || part == "rectum L"
+            return "anal_deep"
+        EndIf
+        if part == "anal cover R" || part == "anal cover L"
+            return "butt"
+        EndIf
+        ; ⚠ Male COM C0-C2 stamp kSubOrificeRing ("Pelvis - orifice ring") just
+        ; like a female's — but on him that is the groin, and the female path
+        ; below would send it to the "genitals" key, which INTERRUPTS when bare.
+        ; The user's rule is that male genital contact is never an interrupt, so
+        ; it routes to male_genitals instead (never interrupts, private).
+        if sub == "Pelvis - orifice ring"
+            return "male_genitals"
+        EndIf
+        ; Any remaining female-ladder label on a male IS the mis-stamp —
+        ; males have no clitoris and no vaginal chain.  Drop, never
+        ; mis-narrate.
+        if sub == "Intimate - external" || sub == "Intimate - vaginal (opening)" \
+            || sub == "Intimate - vaginal (deep)" || sub == "Intimate - vaginal (deepest)"
+            return ""
+        EndIf
+    EndIf
     ; --- Chest ---
     if sub == "Breast"
         if V3PartIsLeft(part)
@@ -877,7 +463,15 @@ String Function V3MapKey(String sub, String part) Global
         EndIf
         return "right_breast"
     EndIf
+    ; ⚠ "Rib cage / back" covers BOTH the front ribs and the upper back.
+    ; PPB names exactly one capsule there for the back (spine2 C17,
+    ; "BACK (upper)"), so the capsule name is the whole discriminator.
+    ; Without this split a hand on her spine narrated as "chest".
+    ; Find is case-SENSITIVE and PPB spells this one in caps.
     if sub == "Rib cage / back"
+        if StringUtil.Find(part, "BACK") >= 0
+            return "upper_back"
+        EndIf
         return "chest"
     EndIf
     if sub == "Shoulder cap" || sub == "Shoulder"
@@ -919,10 +513,20 @@ String Function V3MapKey(String sub, String part) Global
     EndIf
 
     ; --- Torso ---
+    ; Same split one segment down: spine1 C9 is "BACK (lower)".
     if sub == "Belly / midriff"
+        if StringUtil.Find(part, "BACK") >= 0
+            return "lower_back"
+        EndIf
         return "belly"
     EndIf
+    ; And spine0 C5/C6 are literally named "lower back R"/"lower back L" —
+    ; lowercase this time, and in the Waist band sub-region rather than the
+    ; belly one. They were reporting as "waist"; they are the lower back.
     if sub == "Waist band"
+        if StringUtil.Find(part, "lower back") >= 0
+            return "lower_back"
+        EndIf
         return "waist"
     EndIf
 
@@ -1013,6 +617,9 @@ EndFunction
 ; via GetSlotMask's default).
 ; ================================================================
 String Function V3SlotKey(String key) Global
+    if key == "male_genitals"
+        return "genitals"
+    EndIf
     if key == "clitoris" || key == "vaginal" || key == "vaginal_deep" \
     || key == "uterus" || key == "anal" || key == "anal_deep"
         return "genitals"
@@ -1104,6 +711,9 @@ EndFunction
 ; be fed (the existing arousal pipeline only knows V2 keys).
 ; ================================================================
 String Function V3ArousalKey(String key) Global
+    if key == "male_genitals"
+        return "genitals"
+    EndIf
     if key == "clitoris" || key == "vaginal" || key == "vaginal_deep" || key == "uterus"
         return "genitals"
     EndIf
@@ -1123,6 +733,16 @@ EndFunction
 ; fall through to the V2 GetDelay table.
 ; ================================================================
 Float Function V3GetDelay(String key, Bool isGrab, Int arm) Global
+    ; Male genitals: deliberate but responsive bare (0.5s), slower as layers
+    ; mute it — same shape as the female external-genital rows.
+    if key == "male_genitals"
+        if arm >= 2
+            return 2.0
+        ElseIf arm == 1
+            return 1.0
+        EndIf
+        return 0.5
+    EndIf
     if key == "clitoris"
         return 0.3
     EndIf
@@ -1203,6 +823,20 @@ EndFunction
 ; Unknown keys fall through to the V2 GetArousal table.
 ; ================================================================
 Float Function V3GetArousal(String key, Bool isGrab, Int arm) Global
+    ; Male genitals mirror the female external-genital ladder, one notch
+    ; lower (the schema's genitals rows are 20/25 bare): 15 touch / 20 grab
+    ; bare, 10 through clothes, 5 over armor.
+    if key == "male_genitals"
+        if arm == 0
+            if isGrab
+                return 20.0
+            EndIf
+            return 15.0
+        ElseIf arm == 1
+            return 10.0
+        EndIf
+        return 5.0
+    EndIf
     if key == "clitoris"
         if arm == 0
             if isGrab
@@ -1262,6 +896,9 @@ EndFunction
 ; (isGrab is optional so the (key, arm) call form stays valid).
 ; ================================================================
 Bool Function V3IsThought(String key, Int arm, Bool isGrab = False) Global
+    if key == "male_genitals"
+        return False    ; Speak when felt; the armored case goes PERSISTENT
+    EndIf
     if V3IsLadderKey(key)
         return False
     EndIf
@@ -1280,6 +917,12 @@ EndFunction
 ; to V2 IsInterrupting.
 ; ================================================================
 Bool Function V3IsInterrupting(String key, Int arm, Bool isGrab = False) Global
+    ; ★ MALE RULE (user, 2026-08-23): touching a male's genitals is NEVER an
+    ; interrupt, whatever the dress state — reported, not imposed.  Same for
+    ; his chest, which arrives as the plain "chest" key via V3MapKey.
+    if key == "male_genitals"
+        return False
+    EndIf
     if V3IsLadderKey(key)
         return True
     EndIf
@@ -1295,7 +938,7 @@ EndFunction
 ; always; breasts + butt only bare/clothes.
 ; ================================================================
 Bool Function V3IsPrivate(String key, Int arm) Global
-    if V3IsLadderKey(key) || key == "genitals"
+    if V3IsLadderKey(key) || key == "genitals" || key == "male_genitals"
         return True
     EndIf
     if key == "left_breast" || key == "right_breast" || key == "butt"
@@ -1439,6 +1082,12 @@ EndFunction
 ; purpose rather than passing the resolved key in: V3PartOf is also called
 ; for the choke's free-hand thought, which has no key.
 String Function V3PartOf(String sub, String part) Global
+    ; Mirrors V3MapKey's back split — keep the two in step, or the key and
+    ; the narration will disagree about the same touch (the bug that had
+    ; "key=Genitals" narrating as "hip", report 21 §3.2).
+    if sub == "Rib cage / back" && StringUtil.Find(part, "BACK") >= 0
+        return "'s upper back"
+    EndIf
     if sub == "Breast" || sub == "Rib cage / back"
         return "'s chest"
     EndIf
@@ -1462,12 +1111,25 @@ String Function V3PartOf(String sub, String part) Global
         return "'s mouth"
     EndIf
     if sub == "Neck"
-        return "'s throat"
+        ; ★ 2026-08-23: PPB's neck is now TWO capsules — child 1 "front neck"
+        ; (the throat, ~2.5u proud so grabs land on it) and child 0
+        ; "neck / throat" (the main/nape).  A grab from behind is a NECK
+        ; hold, not a throat hold — say so.
+        if part == "front neck"
+            return "'s throat"
+        EndIf
+        return "'s neck"
     EndIf
     if sub == "Belly / midriff"
+        if StringUtil.Find(part, "BACK") >= 0
+            return "'s lower back"
+        EndIf
         return "'s belly"
     EndIf
     if sub == "Waist band"
+        if StringUtil.Find(part, "lower back") >= 0
+            return "'s lower back"
+        EndIf
         return "'s waist"
     EndIf
     if sub == "Pelvis / hip"
@@ -1563,7 +1225,7 @@ String Function V3PreciseOf(String sub, String part) Global
 
     ; --- Redundant with the main word: say nothing rather than
     ;     "Carmella's clitoris (clitoris)". ---
-    if part == "CLITORIS" || part == "neck / throat"
+    if part == "CLITORIS" || part == "neck / throat" || part == "front neck"
         return ""
     EndIf
 
@@ -1597,8 +1259,9 @@ String Function V3PreciseOf(String sub, String part) Global
     if part == "BREAST L"
         return " (left breast)"
     EndIf
+    ; Main word is now "upper back" - a parenthetical repeating it is noise.
     if part == "BACK (upper)"
-        return " (upper back)"
+        return ""
     EndIf
     if part == "lat R"
         return " (right lat)"
@@ -1611,8 +1274,16 @@ String Function V3PreciseOf(String sub, String part) Global
     if part == "belly / navel (FRONT)"
         return " (the navel)"
     EndIf
+    ; Main word is now "lower back" - see the note on BACK (upper).
     if part == "BACK (lower)"
-        return " (lower back)"
+        return ""
+    EndIf
+    ; spine0's pair DO add something: which side of the spine.
+    if part == "lower back R"
+        return " (right side)"
+    EndIf
+    if part == "lower back L"
+        return " (left side)"
     EndIf
     if part == "flank R"
         return " (right flank)"
@@ -1797,6 +1468,21 @@ String Function V3SourceOf(String wand, String src, String name) Global
         EndIf
         return "their gripping right hand"
     EndIf
+    ; ★ Player genital source — SHIPPED in PPB 2.0.0. No left/right: it is not
+    ; a hand, and PPB sends wand 0 for it. `name` carries WHICH part of him made
+    ; contact ("shaft" / "tip"), the same way a weapon carries its own name, so
+    ; the sentence can say it. Statement-of-fact wording only.
+    ; PPB gates these on its own exposure test, so they arrive only when he is
+    ; actually exposed — VRTE adds no gate.
+    if src == "GENITAL"
+        if name == "tip"
+            return "the tip of their own cock"
+        EndIf
+        if name == "shaft"
+            return "the shaft of their own cock"
+        EndIf
+        return "their own cock"
+    EndIf
     if src == "WEAPON"
         if name != ""
             return "their " + name
@@ -1927,4 +1613,599 @@ String Function V3Narration(String npcName, String playerName, \
         return s + ", held for " + (durS as Int) + " seconds."
     EndIf
     return s + "."
+EndFunction
+
+
+; ================================================================
+; ★ 2026-08-23 — MALE UPDATE + DELIVERY REWORK additions
+; ================================================================
+
+; The choke's arming filter (user, 2026-08-23): "the choke will now use the
+; neck front for detection — the main neck worked when grabbed, but someone
+; was getting choked while grabbed from behind, which makes no sense."
+; PPB v2.0 ships slot 7 child 1 = "front neck" on all seven skeletons,
+; sitting ~2.5u proud of the main capsule precisely so a frontal grab lands
+; on it; a grab from behind lands on child 0 ("neck / throat") and now
+; narrates as an ordinary neck hold instead of arming the choke.
+Bool Function V3IsNeckFrontPart(String part) Global
+    return part == "front neck"
+EndFunction
+
+; ★ THE FOURTH DELIVERY TIER (user, 2026-08-23): armored-state contacts the
+; NPC cannot FEEL — they only know about them — become SkyrimNet PERSISTENT
+; EVENTS: context the LLM sees on the NPC's next line, with reactions
+; disabled, no thought budget spent (GenerateNPCThought is throttled to one
+; per NPC per 60s by SkyrimNet itself), and no forced reply.
+;
+; The rule is mechanical, not a hand-picked row list: exactly the rows that
+; were "Though" AT ARMOR STATES (arm >= 2) become persistent.  Clothes-state
+; thoughts stay thoughts — a touch through cloth is felt.  Bare stays Speak.
+; The intimate set keeps its own rules (ladder always speaks; armored
+; interior contact is already dropped by V3PlausibilityDrop).
+Bool Function V3IsPersistent(String key, Bool isGrab, Int arm) Global
+    if arm < 2
+        return False
+    EndIf
+    ; ★ BREAST at HEAVY armor only -> "just an event" (user, 2026-08-23).
+    ; Needs an explicit row: breasts are never a Though (V2 IsThought sends them
+    ; straight to Speak), so the mechanical "was-a-Though-at-armor" rule below
+    ; would never have caught them. Light armor (2) deliberately stays Speak.
+    if key == "left_breast" || key == "right_breast"
+        return arm >= 3
+    EndIf
+    if key == "male_genitals"
+        return True     ; armored male crotch: seen, not felt
+    EndIf
+    return V3IsThought(key, arm, isGrab)
+EndFunction
+
+; ★ MALE GENITAL NARRATION (user spec, 2026-08-23): "(player) touched
+; (NPC)'s (soft, semi-hard, erected) penis at the (tip, middle, base)".
+; Composed here rather than through V3Narration because the sentence
+; carries two axes the 17-param builder has no slots for: the erection
+; state and the position along the shaft.
+;
+; erectLevel is PPB's GENBEND level via VRTouchEvents_Native.GetErectionLevel:
+; -1 = unknown (PPB does not export it yet — the handoff request in report 24
+; asks for it; on -1 the clause is simply omitted and the sentence still
+; works).  0..9 maps: 0-1 soft, 2-4 semi-hard, 5+ erect (PPB's own arousal
+; estimate puts full arousal at level 7).
+;
+; Position from the chord name: 4 chords base->tip, "shaft (lower)"/"(upper)"
+; are both the middle.  Statement-of-fact rule applies throughout: physical
+; words only, the LLM owns the reaction.  Long literals, never per-character
+; assembly (the V3Lower saga).
+String Function V3MaleGenNarration(String npcName, String playerName, \
+        String part, String w1, String src1, String name1, Float dist1, \
+        Int erectLevel, Int arm, String clothName, Float durS) Global
+    String adj = ""
+    if erectLevel >= 5
+        adj = " erect"
+    ElseIf erectLevel >= 2
+        adj = " semi-hard"
+    ElseIf erectLevel >= 0
+        adj = " soft"
+    EndIf
+    String pos = ""
+    if part == "shaft (tip)"
+        pos = " at the tip"
+    ElseIf part == "shaft (base)"
+        pos = " at the base"
+    ElseIf part == "shaft (lower)" || part == "shaft (upper)"
+        pos = " at the middle"
+    EndIf
+    String cloth = clothName
+    if cloth == ""
+        cloth = "clothes"
+    EndIf
+    String verb = V3IntensityVerb(dist1, 0)
+    String narr = ""
+    if arm >= 2
+        ; Armored: the contact is SEEN, not felt — plate tells no tale of
+        ; position or state.  This is the persistent-tier row.
+        narr = playerName + " is " + verb + " the front of " + npcName \
+            + "'s " + cloth + ", over their crotch, with " \
+            + V3SourceOf(w1, src1, name1) + "."
+    ElseIf arm == 1
+        narr = playerName + " is " + verb + " " + npcName + "'s" + adj \
+            + " penis" + pos + ", through their " + cloth + ", with " \
+            + V3SourceOf(w1, src1, name1) + "."
+    Else
+        narr = playerName + " is " + verb + " " + npcName + "'s" + adj \
+            + " penis" + pos + " with " + V3SourceOf(w1, src1, name1) + "."
+    EndIf
+    if durS >= 2.0
+        Int secs = durS as Int
+        narr = narr + " Held for " + secs + " seconds."
+    EndIf
+    return narr
+EndFunction
+
+
+; ================================================================
+; ★ PLAYER-GENITAL SOURCE OVERRIDES (user, 2026-08-23)
+; ================================================================
+; > "we will [need] to reduce that delay, as it is hard AND any type of touch
+; >  with the genitals will make any female react, wearing heavy armor or not."
+;
+; Measured proof of the problem, 2026-08-23 18:29:50: a genital-source contact
+; landed on Carmella's HIP, inherited the hips row's 4.0s dwell, ran 3.08s and
+; expired without ever narrating. Lining the contact up at all is difficult in
+; VR, so the ONE thing that must not happen is a hard-won contact dying on a
+; dwell timer meant for an idle hand resting on a hip.
+;
+; So the SOURCE overrides the body part on both axes:
+;   * DWELL — a flat short dwell wherever it lands. Still non-zero: a brush in
+;     passing is not a press, and zero would fire on every walk-past.
+;   * ARMOR — armor mutes a HAND because padding and plate genuinely deaden it.
+;     It does not mute this: someone pressing their genitals against you is not
+;     something heavy armor makes unremarkable. So the armor state stops
+;     lowering the tier for these contacts (see V3GenSourceFloor).
+; The BODY PART still decides the wording and the arousal — only the pacing and
+; the tier floor are overridden.
+; ================================================================
+
+; Flat dwell for a genital-source contact, whatever part it lands on.
+Float Function V3GenSourceDelay() Global
+    return 0.5
+EndFunction
+
+; True when a genital-source contact must not be demoted by armor state — it
+; always at least SPEAKS. Blocks the Persistent and Though tiers for these,
+; whatever the NPC is wearing.
+Bool Function V3GenSourceFloor(String src1, String src2) Global
+    return src1 == "GENITAL" || src2 == "GENITAL"
+EndFunction
+
+
+; ================================================================
+; ★ INTERIOR KEYS REQUIRE ACTUAL PENETRATION (user, 2026-08-23)
+; ================================================================
+; > "it was on the side of the mouth, not in the mouth, so we need to make sure
+; >  that 'in the mouth' is recorded as such, finger need to go thru the front
+; >  hole first."
+;
+; Measured 2026-08-23 20:23:55: a fingertip beside the mouth reported
+; Face(palate) at d=+0.86u, +0.94u, +0.63u — every reading POSITIVE, i.e.
+; OUTSIDE the capsule surface — while bouncing between upper lip, cheek L and
+; cheekbone L. VRTE narrated "sliding into Prisoner's mouth (the palate)".
+; It was never in his mouth.
+;
+; PPB's INTEGRATION.md states the cause and the cure outright:
+;   "Hover counts as contact. The default threshold is 1.0 unit (~1 cm), so a
+;    near-miss registers briefly. If you want presses only, filter on distU < 0."
+; The palate capsule sits about a centimetre behind the cheek, so a finger ON
+; the cheek is legitimately within hover range of it. Hover is fine for a
+; SURFACE part — brushing a lip is a real touch — but a key that CLAIMS
+; interiority has to be earned by actually being inside.
+;
+; Scope is deliberately narrow: the two keys whose narration asserts the finger
+; is inside the head. The lips (the "front hole") stay hover-permitted, which is
+; exactly the user's rule — you may touch the mouth from outside, but you are
+; only IN it once you are through. The intimate ladder is NOT included: PPB
+; guards those with its own between-the-twins ellipse gate, and they tested
+; clean at 19:51.
+; ================================================================
+Bool Function V3RequiresPenetration(String key) Global
+    return key == "mouth" || key == "mouth_wall"
+EndFunction
+
+
+; ================================================================
+; ★ DEVIOUS DEVICES — the device dictionary (2026-08-23)
+; ================================================================
+; The AddOn reports FACTS about a device that just went on:
+;   "<name>|<classSuffix>|<locked>|<quest>|<siteMask>|<slotMask>"
+; Every WORD the LLM sees is chosen here, so the phrasing can be retuned by
+; editing a script instead of rebuilding a DLL.
+;
+; The user's shape:
+;   "(player) just put a (device name), a (device type) that (what it does).
+;    (locked?) (where on the body) (luxurious / fetish / torture)"
+;
+; ⚠ STATEMENT OF FACT ONLY (report 19 §1). These lines describe MECHANISM and
+; SENSATION — what the thing physically does to the body wearing it. They never
+; say pain, fear, shame, arousal or humiliation. The user was explicit:
+; "never implying emotion, like pain or fear, always neutral to keep the
+;  NPC/LLM to roleplay themself properly."
+;
+; Class suffixes come from DD's own keyword after "Devious", so zad_, zadNG_ and
+; any content mod's prefix all land on the same row (matching the AddOn's DdMask).
+; ================================================================
+
+; --- WHAT KIND OF THING IS IT ------------------------------------------------
+String Function V3DDType(String cls) Global
+    ; ★ 2026-08-23: the class list below is no longer guessed. The 48 real
+    ; zad_Devious* EditorIDs were read out of "Devious Devices - Integration.esm"
+    ; itself, and the AddOn now sends DD's OWN answer (the suffix of the
+    ; zad_DeviousDevice property) rather than the first keyword it happens to
+    ; find. Everything added here previously fell through to "restraint".
+    if cls == "Gag" || cls == "GagLarge" || cls == "GagPanel" || cls == "GagInflatable"
+        return "gag"
+    EndIf
+    if cls == "GagBit"
+        return "bit gag"
+    EndIf
+    if cls == "GagRing"
+        return "ring gag"
+    EndIf
+    if cls == "GagTape"
+        return "strip of gag tape"
+    EndIf
+    if cls == "Blindfold"
+        return "blindfold"
+    EndIf
+    if cls == "Collar"
+        return "collar"
+    EndIf
+    if cls == "ArmCuffs"
+        return "set of wrist cuffs"
+    EndIf
+    if cls == "LegCuffs" || cls == "AnkleShackles"
+        return "set of ankle shackles"
+    EndIf
+    if cls == "Yoke" || cls == "YokeBB"
+        return "yoke"
+    EndIf
+    if cls == "HeavyBondage" || cls == "Boxbinder" || cls == "Armbinder"
+        return "armbinder"
+    EndIf
+    if cls == "ArmbinderElbow"
+        return "elbow armbinder"
+    EndIf
+    if cls == "StraitJacket"
+        return "straitjacket"
+    EndIf
+    if cls == "ElbowTie"
+        return "elbow tie"
+    EndIf
+    if cls == "BondageMittens"
+        return "pair of bondage mittens"
+    EndIf
+    if cls == "CuffsFront"
+        return "pair of wrist cuffs locked together"
+    EndIf
+    if cls == "CuffsArms"
+        return "set of wrist cuffs"
+    EndIf
+    if cls == "CuffsLegs"
+        return "set of ankle shackles"
+    EndIf
+    if cls == "HobbleSkirt" || cls == "HobbleSkirtRelaxed"
+        return "hobble skirt"
+    EndIf
+    if cls == "PetSuit"
+        return "pet suit"
+    EndIf
+    if cls == "PonyGear"
+        return "set of pony gear"
+    EndIf
+    if cls == "Clamps"
+        return "pair of clamps"
+    EndIf
+    if cls == "Belt"
+        return "chastity belt"
+    EndIf
+    if cls == "Bra"
+        return "chastity bra"
+    EndIf
+    if cls == "Corset"
+        return "corset"
+    EndIf
+    if cls == "Harness"
+        return "body harness"
+    EndIf
+    if cls == "Suit"
+        return "full body suit"
+    EndIf
+    if cls == "Hood"
+        return "hood"
+    EndIf
+    if cls == "Gloves"
+        return "pair of bondage gloves"
+    EndIf
+    if cls == "Boots"
+        return "pair of bondage boots"
+    EndIf
+    if cls == "PlugVaginal"
+        return "vaginal plug"
+    EndIf
+    if cls == "PlugAnal"
+        return "anal plug"
+    EndIf
+    if cls == "Plug" || cls == "Butterfly"
+        return "plug"
+    EndIf
+    if cls == "PiercingsNipple"
+        return "set of nipple piercings"
+    EndIf
+    if cls == "PiercingsVaginal"
+        return "intimate piercing"
+    EndIf
+    return "restraint"
+EndFunction
+
+; --- WHAT DOES IT DO TO THE BODY (mechanism + sensation, never emotion) ------
+String Function V3DDDoes(String cls) Global
+    if cls == "Gag" || cls == "GagLarge"
+        return "fills their mouth and holds their jaw open, so no word they try to form comes out as more than a muffled sound"
+    EndIf
+    if cls == "GagPanel"
+        return "seals their mouth behind a fixed panel, leaving them able to breathe but not to speak"
+    EndIf
+    if cls == "GagInflatable"
+        return "swells inside their mouth as it is pumped, packing the space until their tongue cannot move"
+    EndIf
+    if cls == "GagBit"
+        return "sets a bar between their teeth and holds their jaw apart around it"
+    EndIf
+    if cls == "GagRing"
+        return "holds their mouth open around a rigid ring that cannot be closed on it"
+    EndIf
+    if cls == "GagTape"
+        return "seals their lips shut under a pressed strip, flattening every sound they make"
+    EndIf
+    if cls == "Blindfold"
+        return "covers their eyes completely, leaving them to work out by sound and touch alone what is happening around them"
+    EndIf
+    if cls == "Collar"
+        return "closes around their throat, snug enough to be felt with every swallow"
+    EndIf
+    if cls == "ArmCuffs"
+        return "locks their wrists together, so their hands move only as a pair and never far from each other"
+    EndIf
+    if cls == "LegCuffs" || cls == "AnkleShackles"
+        return "links their ankles, cutting their stride to a short shuffle"
+    EndIf
+    if cls == "Yoke"
+        return "spreads their arms wide on a rigid bar at the neck, holding them out where they cannot be brought together"
+    EndIf
+    if cls == "HeavyBondage" || cls == "Boxbinder" || cls == "Armbinder"
+        return "binds their arms behind their back and holds them there, taking their hands out of use entirely"
+    EndIf
+    if cls == "ArmbinderElbow"
+        return "draws their elbows together behind their back and locks them there, so their arms cannot come forward at all"
+    EndIf
+    if cls == "StraitJacket"
+        return "folds their arms across their own chest and buckles them down, leaving nothing below the shoulder free to move"
+    EndIf
+    if cls == "ElbowTie"
+        return "ties their elbows together behind them, holding their shoulders drawn back"
+    EndIf
+    ; ★ 2026-08-24 census gap: YokeBB was in V3DDType and V3DDWhere but NOT here,
+    ; so a big-bar yoke described itself with the generic fallback. Found by
+    ; diffing all three tables against the 40 device classes that actually exist
+    ; in this load order, rather than by anyone hitting it in play.
+    if cls == "YokeBB"
+        return "locks their neck and wrists into one heavy bar that holds their arms spread and level, well away from their body"
+    EndIf
+    if cls == "BondageMittens"
+        return "seals each hand into a closed shape, so their fingers cannot open or take hold of anything"
+    EndIf
+    if cls == "CuffsFront"
+        return "locks their wrists together in front of them, so their hands move only as a pair"
+    EndIf
+    if cls == "CuffsArms"
+        return "locks their wrists together, so their hands move only as a pair and never far from each other"
+    EndIf
+    if cls == "CuffsLegs"
+        return "links their ankles, cutting their stride to a short shuffle"
+    EndIf
+    if cls == "HobbleSkirt" || cls == "HobbleSkirtRelaxed"
+        return "binds their legs together from the hips down, cutting each step to a few inches"
+    EndIf
+    if cls == "PetSuit"
+        return "encases them and holds their limbs folded under them, so they can only move on all fours"
+    EndIf
+    if cls == "PonyGear"
+        return "rigs them for standing tall and stepping high, with the head held up and forward"
+    EndIf
+    if cls == "Clamps"
+        return "closes two jaws on a fold of skin and stays gripped where it was put"
+    EndIf
+    if cls == "Belt"
+        return "locks closed over their hips, putting a rigid shell between their own hands and everything beneath it"
+    EndIf
+    if cls == "Bra"
+        return "encases their chest in a locked shell, holding it firmly and putting it out of reach"
+    EndIf
+    if cls == "Corset"
+        return "cinches tight around their waist, shortening every breath they take"
+    EndIf
+    if cls == "Harness"
+        return "runs straps over their shoulders, chest and hips, pulling taut against the skin with every movement"
+    EndIf
+    if cls == "Suit"
+        return "sheathes them from neck to ankle in one unbroken skin that grips everywhere at once"
+    EndIf
+    if cls == "Hood"
+        return "encloses their whole head, muffling sound and closing off sight"
+    EndIf
+    if cls == "Gloves"
+        return "seals their fingers together inside a shaped mitt, leaving them unable to grip or hold anything"
+    EndIf
+    if cls == "Boots"
+        return "forces their feet into a steep arch and holds them there, so balance takes constant effort"
+    EndIf
+    if cls == "PlugVaginal"
+        return "sits filling them, its weight and shape unmissable with every step"
+    EndIf
+    if cls == "PlugAnal"
+        return "seats itself deep and stays there, felt at every movement of their hips"
+    EndIf
+    if cls == "Plug" || cls == "Butterfly"
+        return "seats itself inside them and stays there, its presence constant"
+    EndIf
+    if cls == "PiercingsNipple"
+        return "pierces each nipple and hangs there, tugging with the smallest shift of their chest"
+    EndIf
+    if cls == "PiercingsVaginal"
+        return "pierces the most sensitive skin they have and rests there, felt at every movement"
+    EndIf
+    return "holds part of them in place and does not come off on its own"
+EndFunction
+
+; --- WHERE IS IT ------------------------------------------------------------
+String Function V3DDWhere(String cls) Global
+    if cls == "Gag" || cls == "GagLarge" || cls == "GagPanel" || cls == "GagInflatable" \
+    || cls == "GagBit" || cls == "GagRing" || cls == "GagTape"
+        return "over their mouth"
+    EndIf
+    if cls == "Blindfold"
+        return "across their eyes"
+    EndIf
+    if cls == "Hood"
+        return "over their head"
+    EndIf
+    if cls == "Collar"
+        return "around their throat"
+    EndIf
+    if cls == "ArmCuffs"
+        return "at their wrists"
+    EndIf
+    if cls == "LegCuffs" || cls == "AnkleShackles"
+        return "at their ankles"
+    EndIf
+    if cls == "Yoke" || cls == "YokeBB" || cls == "HeavyBondage" || cls == "Boxbinder" \
+    || cls == "Armbinder" || cls == "ArmbinderElbow" || cls == "StraitJacket" || cls == "ElbowTie"
+        return "on their arms"
+    EndIf
+    if cls == "BondageMittens"
+        return "on their hands"
+    EndIf
+    if cls == "CuffsFront" || cls == "CuffsArms"
+        return "at their wrists"
+    EndIf
+    if cls == "CuffsLegs"
+        return "at their ankles"
+    EndIf
+    if cls == "HobbleSkirt" || cls == "HobbleSkirtRelaxed"
+        return "around their legs"
+    EndIf
+    if cls == "PetSuit" || cls == "PonyGear"
+        return "over their body"
+    EndIf
+    if cls == "Clamps"
+        return "on their chest"
+    EndIf
+    if cls == "Belt"
+        return "over their hips"
+    EndIf
+    if cls == "Bra" || cls == "PiercingsNipple"
+        return "on their chest"
+    EndIf
+    if cls == "Corset"
+        return "around their waist"
+    EndIf
+    if cls == "Harness" || cls == "Suit"
+        return "over their body"
+    EndIf
+    if cls == "Gloves"
+        return "on their hands"
+    EndIf
+    if cls == "Boots"
+        return "on their feet"
+    EndIf
+    if cls == "PlugVaginal" || cls == "PlugAnal" || cls == "Plug" || cls == "Butterfly" || cls == "PiercingsVaginal"
+        return "between their legs"
+    EndIf
+    return "on their body"
+EndFunction
+
+; --- LUXURIOUS / FETISH / TORTURE -------------------------------------------
+; Judged from the device's own NAME, because that is where DD (and every content
+; mod) actually encodes the register: materials and adjectives. Checked
+; torture-first, then luxury, so "gilded spiked collar" reads as torture — the
+; spikes are the load-bearing fact, the gilding is decoration.
+; StringUtil.Find is case-SENSITIVE and there is NO runtime case transform here
+; ON PURPOSE: lowercasing at runtime is what corrupted the Papyrus string cache
+; twice before (the deleted V3Lower / V3StripParens, TriggerLib:888). DD and its
+; content mods name devices in Title Case ("Iron Collar", "Ebonite Armbinder"),
+; so the needles are Title Case and matched exactly as they ship.
+String Function V3DDRegister(String devName) Global
+    if StringUtil.Find(devName, "Spike") >= 0 || StringUtil.Find(devName, "Iron") >= 0     || StringUtil.Find(devName, "Steel") >= 0 || StringUtil.Find(devName, "Shock") >= 0     || StringUtil.Find(devName, "Chain") >= 0 || StringUtil.Find(devName, "Prison") >= 0     || StringUtil.Find(devName, "Restrictive") >= 0 || StringUtil.Find(devName, "Thorn") >= 0
+        return " It is a crude, punishing piece."
+    EndIf
+    if StringUtil.Find(devName, "Gold") >= 0   || StringUtil.Find(devName, "Silver") >= 0     || StringUtil.Find(devName, "Silk") >= 0   || StringUtil.Find(devName, "Velvet") >= 0     || StringUtil.Find(devName, "Pearl") >= 0  || StringUtil.Find(devName, "Jewel") >= 0     || StringUtil.Find(devName, "Soulgem") >= 0 || StringUtil.Find(devName, "Elegant") >= 0     || StringUtil.Find(devName, "Lace") >= 0
+        return " It is a finely made, expensive-looking piece."
+    EndIf
+    if StringUtil.Find(devName, "Ebonite") >= 0 || StringUtil.Find(devName, "Rubber") >= 0     || StringUtil.Find(devName, "Latex") >= 0   || StringUtil.Find(devName, "Leather") >= 0     || StringUtil.Find(devName, "Harness") >= 0 || StringUtil.Find(devName, "Pony") >= 0
+        return " It is unmistakably fetish gear."
+    EndIf
+    return ""
+EndFunction
+
+; --- ORDINARY GEAR: where a plain piece of clothing or armor sits -----------
+; Keyed on the BIPED SLOT rather than a name table, because that is what the
+; game itself uses and it therefore covers every mod's gear without a row per
+; item. Body (slot 32) is tested FIRST on purpose: a full outfit occupies the
+; body slot plus hands and feet, and "over their body" is the right answer for
+; it - checking hands first would report a dress as a pair of gloves.
+String Function V3GearWhere(Int slotMask) Global
+    if Math.LogicalAnd(slotMask, 4) == 4                   ; 32 body
+        return "over their body"
+    EndIf
+    if Math.LogicalAnd(slotMask, 128) == 128               ; 37 feet
+        return "on their feet"
+    EndIf
+    if Math.LogicalAnd(slotMask, 8) == 8                   ; 33 hands
+        return "on their hands"
+    EndIf
+    if Math.LogicalAnd(slotMask, 16) == 16                 ; 34 forearms
+        return "on their forearms"
+    EndIf
+    if Math.LogicalAnd(slotMask, 256) == 256               ; 38 calves
+        return "on their lower legs"
+    EndIf
+    if Math.LogicalAnd(slotMask, 32) == 32                 ; 35 amulet
+        return "around their neck"
+    EndIf
+    if Math.LogicalAnd(slotMask, 64) == 64                 ; 36 ring
+        return "on their finger"
+    EndIf
+    if Math.LogicalAnd(slotMask, 8192) == 8192             ; 43 ears
+        return "at their ears"
+    EndIf
+    if Math.LogicalAnd(slotMask, 4097) != 0                ; 30 head / 42 circlet
+        return "on their head"
+    EndIf
+    if Math.LogicalAnd(slotMask, 2050) != 0                ; 31 hair / 41 long hair
+        return "over their hair"
+    EndIf
+    if Math.LogicalAnd(slotMask, 4194304) == 4194304       ; 52 pelvis
+        return "over their hips"
+    EndIf
+    return "on their body"
+EndFunction
+
+String Function V3DDWearerLine(String playerName, String npcName, String devName, \
+        String cls, Bool locked, Bool quest) Global
+    String nm = devName
+    if nm == ""
+        nm = "a device"
+    EndIf
+    String line = playerName + " just put " + nm + " on " + npcName + ", a " \
+        + V3DDType(cls) + " " + V3DDWhere(cls) + " that " + V3DDDoes(cls) + "."
+    if quest
+        line = line + " It is locked on, and the lock will not answer any key they have."
+    ElseIf locked
+        line = line + " It is locked on; it will not come off without the key."
+    EndIf
+    return line + V3DDRegister(devName)
+EndFunction
+
+; TWO: for anyone WATCHING — only what is visible from outside. No sensation,
+; because a bystander cannot feel it.
+String Function V3DDWitnessLine(String playerName, String npcName, String devName, \
+        String cls, Bool locked) Global
+    String nm = devName
+    if nm == ""
+        nm = "a device"
+    EndIf
+    String line = playerName + " fitted " + nm + " onto " + npcName + " — a " \
+        + V3DDType(cls) + ", " + V3DDWhere(cls) + "."
+    if locked
+        line = line + " It locked shut."
+    EndIf
+    return line + V3DDRegister(devName)
 EndFunction

@@ -95,11 +95,21 @@ static bool Papyrus_WasHitRecently(RE::StaticFunctionTag*, RE::Actor* a, float w
     return a ? CBPCHook::WasPlayerHitRecently(a->GetFormID(), withinSec) : false;
 }
 
+// ★ MALE UPDATE (2026-08-23): last erection level PPB reported for this actor,
+// -1 = unknown (today: always, until PPB ships the reserved-tail byte the
+// handoff request asks for — the narration omits the erection clause on -1).
+static std::int32_t Papyrus_GetErectionLevel(RE::StaticFunctionTag*, RE::Actor* a)
+{
+    return a ? PpbBridge::GetErectionLevel(a->GetFormID()) : -1;
+}
+
 static bool RegisterPapyrusFuncs(RE::BSScript::IVirtualMachine* vm)
 {
     vm->RegisterFunction("SetScenePaused", "VRTouchEvents_Native", Papyrus_SetScenePaused);
     vm->RegisterFunction("WasHitRecently", "VRTouchEvents_Native", Papyrus_WasHitRecently);
-    logger::info("Registered Papyrus natives VRTouchEvents_Native.SetScenePaused / WasHitRecently.");
+    vm->RegisterFunction("GetErectionLevel", "VRTouchEvents_Native", Papyrus_GetErectionLevel);
+    logger::info("Registered Papyrus natives VRTouchEvents_Native.SetScenePaused / WasHitRecently"
+                 " / GetErectionLevel.");
     return true;
 }
 

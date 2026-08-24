@@ -229,6 +229,15 @@ Int   v3nChokeGag     = 0            ; blocked because the actor is being choked
 Int   v3nGrabGate     = 0            ; blocked by the optional grab-suppression patch
 Int   v3nCombatHit    = 0            ; weapon contact that was a real combat hit
 Int   v3nChokeArm     = 0            ; chokes armed from PPB Neck+GRAB
+Int   v3nPersistent   = 0            ; dispatched as a persistent event (4th tier)
+Int   v3nGenSource    = 0            ; contacts sourced from the player's genitals (PPB gates them)
+Int   v3nHoverDrop    = 0            ; interior key claimed while HOVERING outside the capsule
+Int   v3nUndressArm   = 0            ; AddOn said an undress armed
+Int   v3nUndressGate  = 0            ; grab narration suppressed because an undress is running
+Int   v3nUndressFire  = 0            ; undress narrated (the piece actually came off)
+Int   v3nMasturbation = 0            ; masturbation events received from the AddOn
+Int   v3nGearEquip    = 0            ; ordinary gear equipped on an NPC by hand
+Int   v3nDevice       = 0            ; DD/ZaZ devices equipped and narrated
 Float v3ReportAt      = 0.0          ; realtime the next report may print
 ; Ring of PPB sub-region names already reported as unmapped, so a name PPB
 ; renames or adds is shouted ONCE rather than every 0.25s.
@@ -387,6 +396,28 @@ Function Setup()
     RegisterForModEvent("VRTE_Contact",       "OnVRTEContact")
     RegisterForModEvent("VRTE_ContactUpdate", "OnVRTEContactUpdate")
     RegisterForModEvent("VRTE_ContactEnd",    "OnVRTEContactEnd")
+    ; ★ THE ADDON BUS (2026-08-23). The VRTE DD-ZaZ AddOn pushes what its own
+    ; DLL did in game, exactly as PPB pushes contacts; VRTE only exposes it to
+    ; the LLM. VRTE never re-derives the gesture — the AddOn owns the two-hand
+    ; undress state machine and is the single source of truth for it.
+    ; Registered in Setup ONLY, not in SetTouchSinks: the AddOn is deliberately
+    ; un-gated during scenes (its own design call), so VRTE keeps listening.
+    RegisterForModEvent("VRTE_DDZaZ_UndressArm",   "OnDDZUndressArm")
+    RegisterForModEvent("VRTE_DDZaZ_UndressEnd",   "OnDDZUndressEnd")
+    RegisterForModEvent("VRTE_DDZaZ_Masturbation", "OnDDZMasturbation")
+    RegisterForModEvent("VRTE_DDZaZ_DeviceEquipped", "OnDDZDeviceEquipped")
+    RegisterForModEvent("VRTE_DDZaZ_GearEquipped",   "OnDDZGearEquipped")
+
+    ; ★★ THE SCENE EDGES (2026-08-24). PPB found the reliable signal and this
+    ; matches it: OStim and SexLab both announce a scene as SKSE mod events, and
+    ; those edges are trustworthy in a way the membership tests are not.
+    ; See V3SceneOn for why the old tests were not enough on their own.
+    RegisterForModEvent("ostim_start",            "OnV3SceneStart")
+    RegisterForModEvent("ostim_end",              "OnV3SceneEnd")
+    RegisterForModEvent("StartSexLabAnimation",   "OnV3SceneStart")
+    RegisterForModEvent("EndSexLabAnimation",     "OnV3SceneEnd")
+    RegisterForModEvent("AnimationStart",         "OnV3SceneStart")
+    RegisterForModEvent("AnimationEnd",           "OnV3SceneEnd")
 
     ; V3 dispatcher rings (preserved across loads, like cdActor).
     if v3CdActor.Length < 16
@@ -518,8 +549,7 @@ Event OnUpdate()
     ; firing even when no ticker is active.  A 2-poll grace avoids re-arming on a
     ; transient (e.g. sceneActor briefly unloaded) false "scene ended".
     if modOff
-        if VRTouch_SexLabGate.IsInScene(sceneActor) || VRTouch_SexLabGate.IsInScene(playerRef) \
-        || VRTouch_OStimGate.IsInScene(sceneActor)  || VRTouch_OStimGate.IsInScene(playerRef)
+        if V3InScene(sceneActor)
             sceneEndGrace = 0
         Else
             sceneEndGrace += 1
@@ -606,8 +636,7 @@ Bool Function ScenesSuppress(Actor akActor)
     Float now = Utility.GetCurrentRealTime()
     if (now - sceneCheckAt) >= 0.5
         sceneCheckAt = now
-        sceneActive = VRTouch_SexLabGate.IsInScene(akActor) || VRTouch_SexLabGate.IsInScene(playerRef) \
-                   || VRTouch_OStimGate.IsInScene(akActor)  || VRTouch_OStimGate.IsInScene(playerRef)
+        sceneActive = V3InScene(akActor)
     EndIf
     return sceneActive
 EndFunction
@@ -2125,6 +2154,320 @@ Function OnVRTEContactEnd(String eventName, String strArg, Float numArg, Form se
 EndFunction
 
 ; ================================================================
+; ★ THE ADDON BUS — undress + masturbation (2026-08-23)
+; ================================================================
+; The AddOn detects; VRTE narrates. Two rules the user set:
+;   * While an undress is ARMED, VRTE must not narrate the grab that is doing
+;     it — otherwise one physical act is reported twice, once wrongly.
+;   * When the piece comes off, THAT is the event worth telling the LLM.
+; Arm/End is a PAIR and End fires on cancel too, so an aborted grab cannot
+; leave an actor permanently muted.
+; ================================================================
+Actor  ddzUndressActor  = None      ; the NPC currently being undressed (or None)
+Float  ddzUndressAt     = 0.0       ; realtime the arm arrived — stale-guard only
+
+; True while the AddOn says an undress is running on this actor. The 20 s
+; stale-guard is belt-and-braces: the AddOn sends End on every exit path, but a
+; CTD or a save-load between Arm and End must not mute her forever.
+Bool Function DDZIsUndressing(Actor a)
+    if ddzUndressActor == None || a != ddzUndressActor
+        return False
+    EndIf
+    if Utility.GetCurrentRealTime() - ddzUndressAt > 20.0
+        ddzUndressActor = None
+        VTLog("[DDZ] undress suppression EXPIRED (no End within 20s) - un-muting")
+        return False
+    EndIf
+    return True
+EndFunction
+
+Function OnDDZUndressArm(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None
+        return
+    EndIf
+    ddzUndressActor = a
+    ddzUndressAt    = Utility.GetCurrentRealTime()
+    v3nUndressArm  += 1
+    VTLog("[DDZ] UNDRESS ARMED on " + a.GetDisplayName() + " at '" + strArg + "' - grab narration suppressed")
+EndFunction
+
+; strArg = "<piece>|<slotMask>|<done>|<isDD>|<capsule>"
+Function OnDDZUndressEnd(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a != None && a == ddzUndressActor
+        ddzUndressActor = None          ; un-suppress FIRST, whatever follows
+    EndIf
+    if a == None
+        return
+    EndIf
+    String[] f = StringUtil.Split(strArg, "|")
+    if f.Length < 5
+        return
+    EndIf
+    if f[2] != "1"
+        VTLog("[DDZ] undress cancelled on " + a.GetDisplayName() + " - nothing removed, un-muted")
+        return
+    EndIf
+    String piece = f[0]
+    if piece == ""
+        ; ★ 2026-08-24. A DD device's WORN half carries NO name - the name lives
+        ; on the inventory half (AddOn report 23 §30), and what comes off in
+        ; your hand is the worn one. So a gag used to narrate as "a piece of
+        ; their gear", which is useless in the history the LLM keeps.
+        ; The AddOn now also sends the CLASS, read off the half it actually
+        ; pulled (the worn half DOES carry the class keywords), so the device
+        ; dictionary can name the THING even when the record cannot name itself.
+        String cls = ""
+        if f.Length >= 6
+            cls = f[5]
+        EndIf
+        if cls != ""
+            piece = "the " + VRTouch_TriggerLib.V3DDType(cls)
+        Else
+            piece = "a piece of their gear"
+        EndIf
+    EndIf
+    Int    slotMask = f[1] as Int
+    String capsule  = f[4]
+
+    ; --- tier, per the user's rule ---------------------------------------
+    ; over the BREAST -> interrupt · slot 32 body gear -> DirectNarration ·
+    ; anything else -> persistent event. The capsule test uses case-SENSITIVE
+    ; Find, matching V3MapKey's own "BACK" convention - PPB spells breasts in
+    ; caps ("BREAST R"/"BREAST L").
+    Bool overBreast = (StringUtil.Find(capsule, "BREAST") >= 0)
+    Bool isSlot32   = (Math.LogicalAnd(slotMask, 4) == 4)
+
+    ; Statement of fact only - what was removed and what that leaves. No
+    ; feeling words: the LLM decides how she takes it (report 19 §1).
+    String narr = playerRef.GetDisplayName() + " pulled " + piece + " off " \
+        + a.GetDisplayName() + ", leaving that part of them bare."
+
+    if overBreast
+        SkyrimNetApi.TriggerInterruptDialogue(false)
+        SkyrimNetApi.DirectNarration(narr, a, playerRef)
+        V3RecordFire(a, True)
+        v3nUndressFire += 1
+        VTLog("[DDZ] UNDRESS INTERRUPT (over the breast) on " + a.GetDisplayName() + " | " + narr)
+    ElseIf isSlot32
+        SkyrimNetApi.DirectNarration(narr, a, playerRef)
+        V3RecordFire(a, False)
+        v3nUndressFire += 1
+        VTLog("[DDZ] UNDRESS SPEAK (slot 32) on " + a.GetDisplayName() + " | " + narr)
+    Else
+        SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
+        v3nUndressFire += 1
+        VTLog("[DDZ] UNDRESS PERSISTENT on " + a.GetDisplayName() + " | " + narr)
+    EndIf
+EndFunction
+
+; ================================================================
+; MASTURBATION - the player reaching full erection, seen by whoever can see it.
+; ================================================================
+; User's rule: fire ONLY on the soft -> full transition. Maintaining at full is
+; spam, so the ADDON edge-detects and sends only the crossing; VRTE fires on
+; every event it receives and does no de-duplication of its own.
+;
+; Range 15 m. Skyrim is ~70 units per metre => 1050 units, and the witness must
+; actually SEE it: HasLOS plus vanilla perception (IsDetectedBy respects sneak,
+; light and distance) - the same pair the choke's assault witness uses.
+;
+; Capped at 4 witnesses ON PURPOSE: each is a persistent event landing in that
+; NPC's ~35-entry context window (NpcThoughts.yaml eventHistoryCount). A crowded
+; tavern would otherwise flood every bystander's memory with one act.
+Function OnDDZMasturbation(String eventName, String strArg, Float numArg, Form sender)
+    if modOff
+        return
+    EndIf
+    String narr = playerRef.GetDisplayName() + " is openly stroking themselves to full hardness, in plain view."
+    Int found = 0
+    Int tries = 0
+    Actor lastSeen = None
+    while tries < 12 && found < 4
+        Actor probe = Game.FindRandomActorFromRef(playerRef, 1050.0)
+        if probe != None && probe != playerRef && probe != lastSeen \
+        && !probe.IsDead() && !probe.IsDisabled() && !probe.IsChild()
+            if probe.HasLOS(playerRef) && playerRef.IsDetectedBy(probe)
+                SkyrimNetApi.RegisterPersistentEvent(narr, probe, playerRef)
+                found += 1
+                lastSeen = probe
+                VTLog("[DDZ] MASTURBATION witnessed by " + probe.GetDisplayName())
+            EndIf
+        EndIf
+        tries += 1
+    EndWhile
+    v3nMasturbation += 1
+    VTLog("[DDZ] MASTURBATION lvl=" + strArg + " - " + found + " witness(es) within 15m with line of sight")
+EndFunction
+
+; ================================================================
+; * A DEVIOUS DEVICE WENT ON (2026-08-23)
+; ================================================================
+; strArg = "<name>|<classSuffix>|<locked>|<quest>|<siteMask>|<slotMask>"
+;
+; TWO events, per the user's rule, because the wearer and a bystander know
+; genuinely different things:
+;   * the WEARER gets mechanism AND sensation - what it is doing to their body.
+;     Persistent: it is a lasting STATE, not a moment, and forcing a line the
+;     instant it clicks shut would pre-empt the roleplay rather than feed it.
+;   * WATCHERS get only what is visible from outside. No sensation - they cannot
+;     feel it. Same 15 m / line-of-sight rule as the masturbation witnesses.
+; Neither ever says pain, fear or shame - the LLM decides how it lands.
+Function OnDDZDeviceEquipped(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None || modOff
+        return
+    EndIf
+    String[] f = StringUtil.Split(strArg, "|")
+    if f.Length < 6
+        return
+    EndIf
+    String devName = f[0]
+    String cls     = f[1]
+    Bool   locked  = (f[2] == "1")
+    Bool   quest   = (f[3] == "1")
+
+    String wearerLine = VRTouch_TriggerLib.V3DDWearerLine(playerRef.GetDisplayName(), \
+        a.GetDisplayName(), devName, cls, locked, quest)
+    SkyrimNetApi.RegisterPersistentEvent(wearerLine, a, playerRef)
+    v3nDevice += 1
+    VTLog("[DDZ] DEVICE cls='" + cls + "' locked=" + f[2] + " on " + a.GetDisplayName() + " | " + wearerLine)
+
+    ; --- and whoever could see it happen -----------------------------------
+    String seenLine = VRTouch_TriggerLib.V3DDWitnessLine(playerRef.GetDisplayName(), \
+        a.GetDisplayName(), devName, cls, locked)
+    Int found = 0
+    Int tries = 0
+    Actor lastSeen = None
+    while tries < 12 && found < 4
+        Actor probe = Game.FindRandomActorFromRef(a, 1050.0)
+        if probe != None && probe != a && probe != playerRef && probe != lastSeen \
+        && !probe.IsDead() && !probe.IsDisabled() && !probe.IsChild()
+            if probe.HasLOS(a) && a.IsDetectedBy(probe)
+                SkyrimNetApi.RegisterPersistentEvent(seenLine, probe, playerRef)
+                found += 1
+                lastSeen = probe
+            EndIf
+        EndIf
+        tries += 1
+    EndWhile
+    if found > 0
+        VTLog("[DDZ] DEVICE seen by " + found + " onlooker(s) | " + seenLine)
+    EndIf
+EndFunction
+
+; ================================================================
+; ★★ SCENE SUSPENSION — driven by the scene EDGES (2026-08-24)
+; ================================================================
+; User: "Make sure our Ostim gate is the same fix that PPB use, as PPB
+; discovered that the excitement faction ain't a good scene blocker, there is a
+; 'scene start' and 'scene end' value that really work."
+;
+; ⚠ WHAT WAS WRONG. Scene suppression used to rest entirely on MEMBERSHIP tests
+; asked once every half second:
+;   * SexLab  - IsInFaction(0x0000E50F), the animating faction. A faction is
+;     set by a script at some point during the scene's own startup, so there is
+;     a window where the scene is running and the flag is not set yet - and if
+;     anything interrupts the teardown it can be left set afterwards.
+;   * OStim   - OActor.IsInOStim(a), better, but it only exists if OStim.esp is
+;     present AND the OStim patch was actually installed from the FOMOD.
+; Neither says anything at the MOMENT the scene begins, which is exactly when a
+; touch is most likely to be narrated over the top of it.
+;
+; ★ The edges are the reliable signal, and they cost nothing: both frameworks
+;   announce them as SKSE mod events, so we are told rather than polling.
+;   This is what PPB uses (main.cpp SceneEventSink) and it is now what we use.
+;
+; ⚠ ADDITIVE, NOT A REPLACEMENT. The membership tests stay and are OR-ed with
+; the flag. The complaint was FALSE NEGATIVES - scenes that were not blocked -
+; so removing a signal could only make that worse. A missed `end` event is
+; covered by the expiry below; a missed membership test is covered by the flag.
+;
+; ⚠ AND IT NOW WORKS WITHOUT EITHER PATCH. The mod events reach the BASE
+; install, so a user who never picked the OStim or SexLab option in the FOMOD is
+; now covered too. Those patches become belt-and-braces rather than the only
+; line of defence.
+Bool  v3SceneFlag = False           ; a scene edge said "started"
+Float v3SceneAt   = 0.0             ; realtime of that edge - expiry only
+
+; ⚠ THE EXPIRY IS A BACKSTOP, NOT A TIMER. If an `end` event is ever missed -
+; a CTD mid-scene, a save-load, a framework that forgets - the flag would
+; otherwise mute this NPC forever. 20 minutes is far longer than any scene and
+; far shorter than "forever".
+Bool Function V3InScene(Actor npc)
+    if v3SceneFlag
+        if Utility.GetCurrentRealTime() - v3SceneAt < 1200.0
+            return True
+        EndIf
+        v3SceneFlag = False
+        VTLog("[V3] scene flag EXPIRED (no end event within 20 min) - un-suppressing")
+    EndIf
+    return VRTouch_SexLabGate.IsInScene(npc) || VRTouch_SexLabGate.IsInScene(playerRef) \
+        || VRTouch_OStimGate.IsInScene(npc)  || VRTouch_OStimGate.IsInScene(playerRef)
+EndFunction
+
+Function OnV3SceneStart(String eventName, String strArg, Float numArg, Form sender)
+    if !v3SceneFlag
+        VTLog("[V3] SCENE START ('" + eventName + "') - touch narration suspended")
+    EndIf
+    v3SceneFlag = True
+    v3SceneAt   = Utility.GetCurrentRealTime()
+EndFunction
+
+Function OnV3SceneEnd(String eventName, String strArg, Float numArg, Form sender)
+    if v3SceneFlag
+        VTLog("[V3] SCENE END ('" + eventName + "') - touch narration restored")
+    EndIf
+    v3SceneFlag = False
+EndFunction
+
+; ================================================================
+; * ORDINARY GEAR WENT ON (2026-08-23)
+; ================================================================
+; strArg = "<name>|<slotMask>"
+;
+; User: "the last thing we miss is normal gear equip... A normal persistentEvent
+; to the NPC we give it to. Normal neutral tone as usual, we don't tell NPC how
+; they feel or how to react, we just tell them what is happening."
+;
+; So: ONE event, ONE recipient. No onlooker line - a bystander seeing someone
+; handed a tunic is not worth a slot in anyone's context window, and persistent
+; events are budgeted (NpcThoughts.yaml eventHistoryCount: 35).
+;
+; No tier ladder either: it is always Persistent. Being dressed is a STATE she
+; should know about later, not a moment that needs a reaction now - and a plain
+; equip that INTERRUPTED would be intolerable by the third piece of an outfit.
+;
+; The AddOn decides what counts as "ordinary": a DD-scripted device carries a
+; class and goes out as VRTE_DDZaZ_DeviceEquipped instead, so the two events
+; can never both fire for one item.
+Function OnDDZGearEquipped(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None || a == playerRef || modOff
+        return
+    EndIf
+    String[] f = StringUtil.Split(strArg, "|")
+    if f.Length < 2
+        return
+    EndIf
+    String item = f[0]
+    if item == ""
+        item = "a piece of gear"
+    EndIf
+    Int slotMask = f[1] as Int
+
+    ; Statement of fact and nothing else: what went on, and where it sits. No
+    ; verb of feeling, no reaction cue - report 19 §1, and the user again today:
+    ; "we don't tell NPC how they feel or how to react".
+    String narr = playerRef.GetDisplayName() + " just put " + item + " on " \
+        + a.GetDisplayName() + ". It sits " + VRTouch_TriggerLib.V3GearWhere(slotMask) + "."
+    SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
+    v3nGearEquip += 1
+    VTLog("[DDZ] GEAR slot=" + slotMask + " on " + a.GetDisplayName() + " | " + narr)
+EndFunction
+
+; ================================================================
 ; V3Dispatch — the single policy funnel for Contact + Update.
 ; fromUpdate=True means we are re-testing a pending dwell wait (stay
 ; quiet while still short; fire once the duration crosses the delay).
@@ -2151,6 +2494,40 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
         dist2 = f[13] as Float
     EndIf
     Bool esc = (f[15] == "1")
+
+    ; ★ MALE UPDATE (2026-08-23): resolve the touched actor's sex ONCE.
+    ; PPB's contact carries no sex field (its skeleton string is race-only),
+    ; and PPB itself resolves sex exactly this way internally.  Only
+    ; V3MapKey consumes it — routing decides everything downstream.
+    Int isMale = 0
+    ActorBase npcBase = npc.GetLeveledActorBase()
+    if npcBase && npcBase.GetSex() == 0
+        isMale = 1
+    EndIf
+
+    ; ★ PLAYER GENITAL SOURCE — THE SLOT-52 GATE IS PPB'S, NOT OURS.
+    ;
+    ; The user's rule ("slot 52 empty -> NO CONTACT") is satisfied UPSTREAM:
+    ; PPB 2.0.0 tears the wand down whenever GenitalProbe::IsExposed is false,
+    ; which tests skin->HasPartOf(slot 52) for CAPABILITY *and* no worn armor
+    ; on 52 for STATE (HandBox.cpp WandLifecycle: "putting trousers on tears
+    ; the wand down within a frame").  No wand -> no segments -> no contacts.
+    ;
+    ; ⛔ VRTE briefly carried its own gate here and it was EXACTLY INVERTED:
+    ; it dropped when GetWornForm(52) was None, which is precisely the state
+    ; PPB emits in (the schlong lives on the SKIN, which Papyrus GetWornForm
+    ; cannot see at all — it only reports worn ARMOR).  The two gates in
+    ; series would have dropped 100% of genital contacts and the feature
+    ; would have looked simply dead.  Caught by reading PPB's source rather
+    ; than trusting "it's wired" — 2026-08-23.  Do not re-add it.
+    ;
+    ; Counted purely as a DIAGNOSTIC: if this stays 0 while the player is
+    ; exposed and touching an NPC, the fault is upstream in PPB's wand
+    ; lifecycle, not in VRTE's policy.
+    Bool isGenSrc = (src1 == "GENITAL" || f[8] == "GENITAL")
+    if isGenSrc
+        v3nGenSource += 1
+    EndIf
 
     ; ================================================================
     ; ★ CHOKE ARMING (PART B1) — the choke now ARMS from PPB.
@@ -2188,11 +2565,17 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     ; triggers AND choke initiation suppressed for this actor") instead of
     ; being silently bypassed by the new arming path.  Base mod = stub
     ; returning False, so this costs one call and changes nothing.
-    if sub1 == "Neck" && src1 == "GRAB"
+    ; ★ 2026-08-23: the choke arms on the FRONT NECK capsule only (PPB v2.0
+    ; slot 7 child 1, shipped ~2.5u proud so a frontal grab lands on it).
+    ; A grab from behind lands on the main capsule ("neck / throat") and
+    ; falls through to ordinary narration — being held by the nape is not
+    ; being choked.  Liveness stamping (V3ChokeStamp) deliberately stays
+    ; actor-level: once a choke IS running, any grab contact keeps it alive,
+    ; because the victim squirms and the hand wanders off the capsule.
+    if sub1 == "Neck" && src1 == "GRAB" && VRTouch_TriggerLib.V3IsNeckFrontPart(part1)
         if VRTouch_GrabGate.ShouldSuppressGrab(npc)
             VTLog("[V3] CHOKE ARM SUPPRESSED (grab gate) on " + npc.GetDisplayName())
-        ElseIf VRTouch_SexLabGate.IsInScene(npc) || VRTouch_SexLabGate.IsInScene(playerRef) \
-        || VRTouch_OStimGate.IsInScene(npc)  || VRTouch_OStimGate.IsInScene(playerRef)
+        ElseIf V3InScene(npc)
             VTLog("[V3] CHOKE ARM SUPPRESSED (scene gate) on " + npc.GetDisplayName())
         ElseIf V3LogOnly
             ; Shadow mode: log the candidate, never arm.
@@ -2230,7 +2613,7 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     EndIf
 
     ; --- Key resolve ---
-    String key = VRTouch_TriggerLib.V3MapKey(sub1, part1)
+    String key = VRTouch_TriggerLib.V3MapKey(sub1, part1, isMale)
     if key == ""
         v3nUnmapped += 1
         ; Shout a NEW unknown name once, loudly — it means PPB's sub-region
@@ -2246,6 +2629,16 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
         return
     EndIf
     Bool isGrab = (src1 == "GRAB")
+
+    ; ★ UNDRESS SUPPRESSION (2026-08-23). The AddOn is mid-undress on this
+    ; actor: the two-hand grab doing it must NOT also be narrated as a grope.
+    ; The AddOn sends the real event when the piece actually comes off.
+    if isGrab && DDZIsUndressing(npc)
+        v3nUndressGate += 1
+        VTLog("[V3] SUPPRESSED (undress in progress): " + key + " on " + npc.GetDisplayName())
+        V3PendClear(npc)
+        return
+    EndIf
 
     ; --- Grab-suppression gate (parity with OnObjectGrabbed) ---
     ; src=GRAB IS a HIGGS grab (PpbTouchAPI.h kSourceGrab), so the same
@@ -2302,9 +2695,28 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
         return
     EndIf
 
+    ; --- Interior claim must be earned: hover is not "inside" ---
+    ; A positive distU is OUTSIDE the capsule surface. PPB reports hover as
+    ; contact by design (apiTouchU 1.0 ~ 1 cm), and the palate capsule sits about
+    ; that far behind the cheek — so a finger on the cheek reads as the palate.
+    ; Drop the interior verdict rather than narrate "sliding into their mouth"
+    ; for a touch on the side of the face. The surface parts of the same session
+    ; still report normally.
+    if VRTouch_TriggerLib.V3RequiresPenetration(key) && dist1 >= 0.0
+        v3nHoverDrop += 1
+        VTLog("[V3] HOVER DROP key=" + key + " part='" + part1 + "' dist=" + dist1             + " (>=0 means OUTSIDE the capsule — not inside) on " + npc.GetDisplayName())
+        V3PendClear(npc)
+        return
+    EndIf
+
     ; --- Per-(part,armor) delay vs the session's primary duration ---
     ; Escalations fire IMMEDIATELY (user rule 3) — no dwell wait.
     Float delay = VRTouch_TriggerLib.V3GetDelay(key, isGrab, arm) * DelayMultiplier
+    ; ★ The genital source overrides the body part's dwell (user, 2026-08-23):
+    ; it is hard enough to land at all without also holding a hip's 4s timer.
+    if isGenSrc
+        delay = VRTouch_TriggerLib.V3GenSourceDelay() * DelayMultiplier
+    EndIf
     if !esc && dur < delay
         if !fromUpdate
             v3nPending += 1
@@ -2316,8 +2728,7 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     V3PendClear(npc)
 
     ; --- Gates, in order: scene, choke gag, cooldown (mirrors FireTrigger) ---
-    if VRTouch_SexLabGate.IsInScene(npc) || VRTouch_SexLabGate.IsInScene(playerRef) \
-    || VRTouch_OStimGate.IsInScene(npc)  || VRTouch_OStimGate.IsInScene(playerRef)
+    if V3InScene(npc)
         v3nSceneGate += 1
         VTLog("[V3] SUPPRESSED (scene gate): " + key + " on " + npc.GetDisplayName())
         return
@@ -2347,6 +2758,25 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     EndIf
     Bool interrupting = esc || VRTouch_TriggerLib.V3IsInterrupting(key, arm, isGrab)
     Bool asThought    = VRTouch_TriggerLib.V3IsThought(key, arm, isGrab)
+    ; ★ THE FOURTH TIER (2026-08-23): armored-state contacts go out as
+    ; SkyrimNet PERSISTENT EVENTS — context without a forced reaction.
+    ; Overrides the thought tier where both would apply (the rule is
+    ; literally "armored Though rows become persistent").  Never for an
+    ; interrupt or an escalation.
+    Bool asPersistent = False
+    if !interrupting && VRTouch_TriggerLib.V3IsPersistent(key, isGrab, arm)
+        asPersistent = True
+        asThought    = False
+    EndIf
+    ; ★ THE ARMOR FLOOR for a genital-source contact (user, 2026-08-23): armor
+    ; mutes a hand, it does not make someone pressing their genitals against you
+    ; unremarkable. So these never fall to the quiet tiers, whatever she wears —
+    ; they always at least SPEAK. (They still never force an INTERRUPT: that
+    ; stays reserved for the intimate ladder and bare intimate contact.)
+    if isGenSrc
+        asPersistent = False
+        asThought    = False
+    EndIf
 
     ; ================================================================
     ; THE GATE — two clocks, and thoughts are exempt entirely.
@@ -2389,9 +2819,19 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     EndIf
 
     ; --- Compose ---
-    String narr = VRTouch_TriggerLib.V3Narration(npc.GetDisplayName(), playerRef.GetDisplayName(), \
-        sub1, part1, w1, src1, name1, dist1, dep1, \
-        sub2, part2, w2, src2, name2, dist2, dep2, dur)
+    String narr = ""
+    if key == "male_genitals"
+        ; ★ Dedicated composer: carries erection state (PPB GENBEND level via
+        ; the native; -1 until PPB exports it -> clause omitted) and the
+        ; position along the shaft (from the chord name).
+        narr = VRTouch_TriggerLib.V3MaleGenNarration(npc.GetDisplayName(), \
+            playerRef.GetDisplayName(), part1, w1, src1, name1, dist1, \
+            VRTouchEvents_Native.GetErectionLevel(npc), arm, clothName, dur)
+    Else
+        narr = VRTouch_TriggerLib.V3Narration(npc.GetDisplayName(), playerRef.GetDisplayName(), \
+            sub1, part1, w1, src1, name1, dist1, dep1, \
+            sub2, part2, w2, src2, name2, dist2, dep2, dur)
+    EndIf
     String privStr = "0"
     if VRTouch_TriggerLib.V3IsPrivate(key, arm)
         privStr = "1"
@@ -2411,6 +2851,8 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
         String mode = "SPEAK"
         if asThought
             mode = "THOUGHT"
+        ElseIf asPersistent
+            mode = "PERSISTENT"
         EndIf
         VTLog("[V3] WOULD FIRE (" + mode + ") key=" + key + " arm=" + arm + " esc=" + f[15] + " priv=" + privStr \
             + " | " + w1 + "/" + src1 + " part=" + part1 + " sub=" + sub1 + " dep=" + dep1 + " dist=" + f[6] + " dur=" + dur \
@@ -2461,7 +2903,21 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     ; pass-through YAMLs were emulating:
     ;   targetActor = the player -> she answers the player  (private)
     ;   targetActor = None       -> she addresses everyone nearby (public)
-    if asThought
+    if asPersistent
+        ; --- PERSISTENT (the fourth tier, 2026-08-23): context, no reaction.
+        ; RegisterPersistentEvent is a DIRECT API call (not trigger-evaluated
+        ; — TriggerManager is still dead on this load order, re-verified
+        ; 2026-08-23), lands in the NPC's own event history, and SkyrimNet
+        ; disables dialogue reactions on it by default.  It has NO SkyrimNet-
+        ; side throttle and the prompt only renders ~35 events
+        ; (NpcThoughts.yaml eventHistoryCount), so it consults AND stamps
+        ; the NORMAL clock like a Speak — armored contact spam must not
+        ; evict her real context.
+        v3nPersistent += 1
+        SkyrimNetApi.RegisterPersistentEvent(narr, npc, playerRef)
+        V3RecordFire(npc, False)
+        VTLog("[V3] PERSISTENT key=" + key + " arm=" + arm + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
+    ElseIf asThought
         ; ★ A thought stamps NEITHER clock.  It is transparent to the
         ; cooldown system in both directions: it is not gated by it (above)
         ; and it does not consume anyone else's turn.  It is unvoiced and
@@ -2559,6 +3015,10 @@ Function V3ReportMaybe()
         + " | suppressed: cooldown=" + v3nCooldown + " scene=" + v3nSceneGate \
         + " chokegag=" + v3nChokeGag + " grabgate=" + v3nGrabGate \
         + " combathit=" + v3nCombatHit \
+        + " | persistent=" + v3nPersistent + " genSource=" + v3nGenSource         + " hoverDrop=" + v3nHoverDrop \
+        + " | undress: arm=" + v3nUndressArm + " gate=" + v3nUndressGate + " fire=" + v3nUndressFire \
+        + " masturbation=" + v3nMasturbation + " device=" + v3nDevice \
+        + " gear=" + v3nGearEquip \
         + " | chokesArmed=" + v3nChokeArm)
 EndFunction
 

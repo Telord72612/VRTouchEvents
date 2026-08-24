@@ -5,6 +5,37 @@ SkyrimNet plugin for SkyrimVR touch and grab detection, pushed to the LLM so NPC
 
 ---
 
+## ★ NEW IN V3.2
+
+**Males are covered, end to end.** Chest contact never interrupts, whatever the dress state. Genital
+contact is reported with erection state and position — *"brushing against his soft penis at the
+middle"* — and never interrupts either. Male orifices are matched by capsule **name**, so they are
+never read through the female map.
+
+**The choke is a throat hold again.** It arms only on the **front** of the neck. A grab on the nape
+is a neck hold and starts nothing — previously someone could be strangled from behind.
+
+**A fourth delivery tier: persistent events.** Quiet contact is now *remembered* rather than
+announced — the NPC can raise it later in conversation without the moment itself interrupting anyone.
+Armoured and casual contact moved here, and many old interrupts became plain speech, so only
+genuinely intrusive contact still cuts the room off.
+
+**Scene suppression rebuilt.** It now listens for the scene **start and end events** that OStim and
+SexLab broadcast, instead of only asking whether an actor is in an animating faction. A faction is
+set partway through a scene's own startup — precisely when a touch is most likely to be narrated over
+the top of it — and an interrupted teardown can leave it set afterwards. The old per-actor checks are
+kept and OR-ed with the new signal, and the events reach the **base install**, so scene suppression
+now works even if you install neither optional patch.
+
+**A silent bug that predates V3.0 is fixed.** A race between PPB's two data streams was destroying
+**short touches** outright — a quick grab on an arm or a foot often produced nothing at all, on
+anyone. Long contact survived by luck. If touches have ever felt unreliable rather than *absent*,
+this was why. (`CONNECTING_TO_PPB.md` section 3 has the mechanism.)
+
+**Your own genitals are a touch source**, gated by PPB's own exposure check.
+
+---
+
 ## ⚠ V3.0 IS A COMPLETE REWRITE — READ THIS FIRST
 
 **V3.0 no longer uses CBPC for touch detection.** All sensing now comes from **Precision Physic Bodies (PPB)**, which reads the actual Havok collision bodies instead of CBPC collision spheres. CBPC and "More Haptics VR CBPC config" are **no longer requirements**, and V3.0 ships **no CBPC config files at all**.
@@ -19,11 +50,11 @@ What this buys you:
 
 **What it costs you — this is important:**
 
-> **PPB only drives FEMALE NPCs of mapped races** (the human catch-all — which covers elves, orcs and most custom races — plus Argonian, Khajiit and Draenei, plus anything you add to PPB's `PPB_Skeletons_Added_Race.ini`).
+> **PPB drives mapped races** — the human catch-all (which covers elves, orcs and most custom races), plus Argonian, Khajiit and Draenei, plus anything you add to PPB's `PPB_Skeletons_Added_Race.ini`.
 >
-> **Males, children and creatures produce NO touch reactions in V3.0.** V2.0 covered them incidentally through CBPC. They will come back as PPB's own coverage grows — no update to this mod will be needed when it does.
+> **Males are covered as of V3.2** (with PPB 2.0.0 or later) — this was the headline gap in V3.0/V3.1 and it is closed. **Children and creatures still produce no touch reactions**; they return as PPB's own coverage grows, with no update to this mod needed when it does.
 
-If male NPC touch reactions matter to you, **stay on V2.0**.
+Coverage is PPB's, not ours: this mod has no per-race or per-sex logic of its own, which is exactly why males needed no rewrite here — only decisions about what the new contacts should *mean*.
 
 ---
 
@@ -60,7 +91,9 @@ Tested with OSL Aroused Reborn.
 
 Install like any other mod. No settings needed, no config editing. Put it **below** all requirements in MO2, **above** them in Vortex.
 
-Two optional patches are included — one for SexLab, one for OStim. They stop touch and grab events from firing during those scenes, and they also put the whole mod to sleep for the duration so it costs nothing while a scene runs.
+Two optional patches are included — one for SexLab, one for OStim. They stop touch and grab events from firing during those scenes.
+
+**As of V3.2 they are belt-and-braces rather than the only line of defence:** the base install now listens for the scene start/end events both frameworks broadcast, so suppression works without either patch. Keep them anyway — they add a per-actor check that also catches a scene whose *end* event never arrived.
 
 ---
 

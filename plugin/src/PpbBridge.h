@@ -58,4 +58,9 @@ namespace PpbBridge {
     // an End for an interaction that stopped because a scene started carries
     // no information, and Papyrus has unregistered its sinks anyway.
     void SetPaused(bool paused);
+
+    // Last erection level seen for this actor (0..9), or -1 when unknown —
+    // which includes "PPB does not send the byte yet" (see the GenLevelEntry
+    // banner in the .cpp). Cheap array scan; main thread.
+    int GetErectionLevel(std::uint32_t actorFormId);
 }

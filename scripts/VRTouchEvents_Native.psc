@@ -24,3 +24,9 @@ Function SetScenePaused(Bool paused) Global Native
 ; (a gentle blade-rest deals no damage -> returns False -> still reacts).
 ; Backed by the plugin's TESHitEvent sink.  False if the DLL lacks this native.
 Bool Function WasHitRecently(Actor a, Float withinSec) Global Native
+
+; ★ 2026-08-23: the last erection level (PPB GENBEND, 0..9) the bridge saw for
+; this actor, or -1 when unknown.  -1 is the PERMANENT answer until PPB ships
+; the reserved-tail byte the report-24 handoff request asks for — callers must
+; treat -1 as "omit the erection clause", never as an error.
+Int Function GetErectionLevel(Actor a) Global Native

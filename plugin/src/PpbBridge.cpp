@@ -49,6 +49,18 @@ namespace {
     constexpr double kWandStaleS    = 0.6;   // wand entry unseen this long -> cleared
                                              //   (also bridges PPB's region-handover gap:
                                              //    End(regionA) .. ~0.26 s .. Start(regionB))
+    // ⛔ THE RAW-LAG GRACE (2026-08-23). A session is created by a digest Start,
+    // but Pass A reads the RAW snapshot, which this file already documents as
+    // "one frame stale". So for the first sweep (or few) after creation there is
+    // legitimately NO raw entry yet — and Pass C's `PickPrimaryLive(s) < 0` used
+    // to read that as "the touch is over" and destroy the session on the spot,
+    // WHILE liveDigest still said a hand was on her. Measured 2026-08-23: ten
+    // kills in one session, every one at `age=0.00s sweeps-since-open=1`,
+    // including a 10.03 s palm on a male's chest that never reached Papyrus.
+    // Short touches died outright; long ones only survived because a LATER Start
+    // happened to arrive once raw had caught up.
+    // While the digest says a hand is on her, wait this long for raw to appear.
+    constexpr double kRawGraceS     = 2.0;
     constexpr double kSessionRetireS = 1.5;  // a lingering dead session older than this is
                                              //   retired when a NEW touch on that actor starts
     constexpr int    kMaxSessions   = 8;     // session cap (LRU-evict oldest, End emitted)
@@ -77,7 +89,12 @@ namespace {
         case PPBAPI::kSubMouthWall:       return 85;
         case PPBAPI::kSubVaginalOpening:  return 80;
         case PPBAPI::kSubAnalOpening:     return 80;
-        case PPBAPI::kSubInMouthDeep:     return 78;
+        case PPBAPI::kSubInMouthDeep:     return 35;   // ★ 2026-08-23: was 78. This capsule
+                                                       // (under-jaw 3.11) MAPS TO FACE in
+                                                       // Papyrus (report 21 A6) — at 78 it
+                                                       // could fire esc=1 and bypass both
+                                                       // cooldown clocks for a face touch.
+                                                       // Now sits with kSubFaceSurface.
         case PPBAPI::kSubInMouth:         return 75;
         case PPBAPI::kSubIntimateExternal:return 70;   // clitoris
         case PPBAPI::kSubOrificeRing:     return 60;
@@ -106,6 +123,61 @@ namespace {
         case PPBAPI::kSubHair:            return 6;
         default:                          return 5;    // kSubNone / unknown
         }
+    }
+
+    // ★ MALE UPDATE (2026-08-23): contact-level priority. The male genital chain
+    // reports through pseudo-slot kSlotGen=102 with subRegion=kSubNone (PPB has
+    // no GEN sub-region enum yet), so PriorityOf(subRegion) alone scored a male
+    // genital touch 5 — the absolute bottom, below hair. It loses the wand-slot
+    // contest to ANY simultaneous body contact. Slot-aware wrapper: GEN sits at
+    // the external-intimate tier (70, same as clitoris).
+    int PriorityOfContact(const PPBAPI::PpbTouchContact& c) {
+        if (c.slot == PPBAPI::kSlotGen) return 70;
+        const int p = PriorityOf(c.subRegion);
+        // ★ GENITAL-SOURCE PRIORITY FLOOR (user, 2026-08-23).
+        //
+        //   "Priority is our business. PPB reports touch, we decide which one is
+        //    priority. If PPB reports clitoris .25 sec 20 times because the finger
+        //    is shaking, it's a touch and we make it the priority."
+        //
+        // PPB sends `wand = 0` for a genital contact because it is not a hand
+        // (INTEGRATION.md: "wand is meaningless and reads 0"). That puts it in the
+        // SAME session slot as the player's RIGHT HAND, so without a floor an idle
+        // right hand resting on her face (35) silently evicted a genital contact on
+        // her hip (25) — the contact hardest to line up in VR losing to the easiest.
+        //
+        // The floor is a floor, not an override: a genital contact that lands
+        // somewhere genuinely deeper keeps that higher number (uterus stays 100).
+        // 70 = the external-intimate tier, the same value the GEN chain itself
+        // carries — so it outranks ordinary body contact without ever outranking
+        // the intimate ladder.
+        if (c.sourceKind == PPBAPI::kSourceGenital && p < 70) return 70;
+        return p;
+    }
+
+    // ★ ERECTION-LEVEL CACHE (2026-08-23). PPB tracks a per-male bend level
+    // (GENBEND, 0..genBendMax) but does not expose it through the API yet — the
+    // handoff request (Report/VRTouchEvents Module/24, PPB-request section) asks
+    // for `_reserved[0] = genLevel + 1` on every contact whose touched actor is
+    // male. The reserved tail is contractually ZERO today, so on the current PPB
+    // this reads 0 → cache never fills → Papyrus GetErectionLevel returns -1 and
+    // the narration simply omits the erection clause. When PPB ships the byte it
+    // lights up with no rebuild on either side. Values are sanity-capped at 10.
+    struct GenLevelEntry { std::uint32_t fid = 0; int level = -1; };
+    GenLevelEntry g_genLevel[16];
+    // ⚠ level == -1 means UNKNOWN and must be RECORDED, not ignored — see the
+    // caller. It never ALLOCATES on -1 though: an unknown level is the default
+    // answer anyway, so letting every female in the scene claim a cache slot
+    // would evict the males we actually care about.
+    void NoteGenLevel(std::uint32_t fid, int level) {
+        int free_ = -1;
+        for (int i = 0; i < 16; ++i) {
+            if (g_genLevel[i].fid == fid) { g_genLevel[i].level = level; return; }
+            if (free_ < 0 && g_genLevel[i].fid == 0) free_ = i;
+        }
+        if (level < 0) return;                          // unknown + not cached = nothing to say
+        if (free_ < 0) free_ = 0;                       // overwrite slot 0 — 16 males in
+        g_genLevel[free_] = { fid, level };             // one session is already absurd
     }
 
     // ── Session state ──────────────────────────────────────────────────────────
@@ -143,6 +215,8 @@ namespace {
         int           emittedPriority = -1;  // -1 until the first VRTE_Contact
         double        lastUpdateEmit  = 0.0;
         double        lastSeenAny     = 0.0;
+        int           sweepsSeen      = 0;   // sweeps run while this session was open —
+                                             // 0 means the sweep never even looked
     };
 
     Session g_sessions[kMaxSessions];
@@ -180,6 +254,13 @@ namespace {
         case PPBAPI::kSourceGrab:   return "GRAB";
         case PPBAPI::kSourceWeapon: return "WEAPON";
         case PPBAPI::kSourceObject: return "OBJECT";
+        // ★ SHIPPED in PPB 2.0.0 (build 20000): the player's own genitals as a
+        // touch source. PPB gates emission itself on GenitalProbe::IsExposed
+        // (skin carries slot 52 AND no worn armor on 52), so a dressed or
+        // schlong-less player produces NO contacts at all — VRTE adds no gate
+        // of its own (an earlier VRTE-side slot-52 test was exactly inverted
+        // against this one and would have dropped every contact).
+        case PPBAPI::kSourceGenital: return "GENITAL";
         default:                    return "HAND";
         }
     }
@@ -191,9 +272,23 @@ namespace {
 
     // Fill one wand's 7 strArg fields (W/SRC/NAME/PART/SUB/DEP/DIST) into f[0..6].
     void FillEntry(std::string* f, const WandEntry& e, int wandIdx) {
-        f[0] = (wandIdx == 1) ? "L" : "R";
+        // ★ INTEGRATION.md on kSourceGenital: "wand is MEANINGLESS and reads 0.
+        // It is not a hand. Switch on sourceKind, never on wand." Reporting it as
+        // "R" would have been an outright lie in the payload — and W1 is what the
+        // narration and the choke-hand latch read. "G" says what it is.
+        // (Safe for the two L/R consumers: both sit behind src=="GRAB", which a
+        // genital contact can never be.)
+        f[0] = (e.sourceKind == PPBAPI::kSourceGenital) ? "G"
+             : (wandIdx == 1)                          ? "L"
+                                                       : "R";
         f[1] = SourceStr(e.sourceKind);
-        f[2] = (e.sourceKind == PPBAPI::kSourceWeapon || e.sourceKind == PPBAPI::kSourceObject)
+        // ★ GENITAL joins WEAPON/OBJECT as a source that NAMES ITSELF: PPB puts
+        // "shaft" or "tip" in sourceName (which segment of him made contact),
+        // exactly as a weapon carries its own name. Dropping it here would have
+        // thrown that detail away before Papyrus ever saw it.
+        f[2] = (e.sourceKind == PPBAPI::kSourceWeapon ||
+                e.sourceKind == PPBAPI::kSourceObject ||
+                e.sourceKind == PPBAPI::kSourceGenital)
                    ? Sanitize(e.sourceName) : "";
         f[3] = Sanitize(e.bodyPart);
         f[4] = Sanitize(SubName(e.subRegion));
@@ -241,8 +336,8 @@ namespace {
     // Tie-break contract: higher priority, then higher depth, then deeper distU
     // (more negative), then keep the incumbent (return false).
     bool ContactBeats(const PPBAPI::PpbTouchContact& a, const PPBAPI::PpbTouchContact& b) {
-        const int pa = PriorityOf(a.subRegion);
-        const int pb = PriorityOf(b.subRegion);
+        const int pa = PriorityOfContact(a);
+        const int pb = PriorityOfContact(b);
         if (pa != pb)             return pa > pb;
         if (a.depth != b.depth)   return a.depth > b.depth;
         if (a.distU != b.distU)   return a.distU < b.distU;
@@ -271,7 +366,7 @@ namespace {
         e.sourceKind = c.sourceKind;
         e.subRegion  = c.subRegion;
         e.depth      = c.depth;
-        e.priority   = PriorityOf(c.subRegion);
+        e.priority   = PriorityOfContact(c);
         e.durationS  = c.durationS;
         e.lastSeen   = now;
         CopyStr(e.bodyPart,   sizeof(e.bodyPart),   c.bodyPart);
@@ -362,7 +457,23 @@ namespace {
             p = 1;
         }
         if (p < 0) {
-            return;  // never populated — nothing to report (shouldn't happen)
+            // ⛔ 2026-08-23 — THIS DID HAPPEN, TWICE, AND IT WAS SILENT.
+            // A 7.18s PALM on a male's chest and a 7.23s FINGER on a female's
+            // CLITORIS both had a digest lifecycle (Start..End) yet never had a
+            // single RAW contact merged into either wand slot, so the session
+            // closed reporting nothing at all. Papyrus never heard of either
+            // touch. The old comment said "shouldn't happen" and returned — so
+            // the one thing that could have explained it was never written down.
+            // Now it says so, with everything needed to tell a PPB-side raw-stream
+            // gap from a bridge-side sweep gap.
+            logger::info("[PPB-BRIDGE] ⛔ End with NO raw contact ever merged "
+                         "fid=0x{:08X} liveDigest=[{},{}] sweeps-since-open={} "
+                         "age={:.2f}s — the digest saw this touch but the raw "
+                         "stream never did in {:.1f}s. NOTHING was sent to Papyrus.",
+                         s.fid, s.liveDigest[0], s.liveDigest[1], s.sweepsSeen,
+                         static_cast<float>(s.lastSeenAny - s.startTime),
+                         static_cast<float>(kRawGraceS));
+            return;
         }
         const float total = static_cast<float>(s.lastSeenAny - s.startTime);
         if (s.emittedPriority < 0) {
@@ -436,6 +547,25 @@ namespace {
             s_cand[i][1] = -1;
         }
 
+        // ★ Erection-byte harvest (see GenLevelEntry above). Reads _reserved[0]
+        // on EVERY raw contact — 0 on today's PPB (tail is contractually zero),
+        // genLevel+1 once the handoff request ships. Done before the wand guard
+        // so a future genital-wand contact also stamps it.
+        for (int i = 0; i < n; ++i) {
+            const unsigned char gl = buf[i]._reserved[0];
+            // ⛔ FIXED 2026-08-23 from PPB's INTEGRATION.md, which is explicit:
+            //   "The byte is written on EVERY contact including the zero, so a 0
+            //    arriving mid-contact means 'no longer known' — not 'unchanged'."
+            // The first cut only wrote on gl >= 1, so once a level was cached it
+            // FROZE there: he dresses, the rig goes away, PPB starts sending 0 —
+            // and VRTE would have gone on narrating "his erect penis" off a stale
+            // byte indefinitely. Exactly the keep-last-nonempty trap PPB warns
+            // about in its own stamping code. 0 now clears to unknown (-1), which
+            // makes the narration drop the erection clause instead of lying.
+            NoteGenLevel(buf[i].actorFormId,
+                         gl >= 1 ? static_cast<int>(gl) - 1 : -1);
+        }
+
         // Pass A — pick each (actor, wand)'s winning raw contact this sweep.
         // GRAB wins a contested wand slot outright; otherwise priority decides
         // (ContactBeats keeps the incumbent on a full tie).
@@ -471,6 +601,7 @@ namespace {
             if (!s.active) {
                 continue;
             }
+            ++s.sweepsSeen;   // diagnostic for the "no raw contact ever merged" case
             for (int w = 0; w < 2; ++w) {
                 if (s_cand[si][w] >= 0) {
                     ApplyContact(s.wand[w], buf[s_cand[si][w]], now);
@@ -519,6 +650,18 @@ namespace {
             }
             const int p = PickPrimaryLive(s);
             if (p < 0) {
+                // ★ liveDigest is PPB's AUTHORITATIVE "is this hand still on her"
+                // (this file says so 30 lines up, and the wand-clearing rule above
+                // already refuses to act on raw alone). Honour it HERE too: while
+                // the digest says a hand is on her, a missing raw entry means raw
+                // has not caught up yet — not that the touch ended. Bounded by
+                // kRawGraceS so a stuck digest cannot pin a session open forever,
+                // and the give-up still logs (see EmitEnd) so a genuine raw-stream
+                // gap is still reported rather than silently waited out.
+                const bool digestLive = (s.liveDigest[0] > 0 || s.liveDigest[1] > 0);
+                if (digestLive && (now - s.startTime) < kRawGraceS) {
+                    continue;   // raw is one frame behind — give it a moment
+                }
                 EmitEnd(s, now);
                 s = Session{};
                 continue;
@@ -687,7 +830,15 @@ namespace PpbBridge {
                      api->GetBuildNumber(), kWindowS, kUpdatePeriodS, kWandStaleS, kMaxSessions);
     }
 
-    void SetPaused(bool paused) {
+    int GetErectionLevel(std::uint32_t actorFormId)
+{
+    for (int i = 0; i < 16; ++i) {
+        if (g_genLevel[i].fid == actorFormId) return g_genLevel[i].level;
+    }
+    return -1;
+}
+
+void SetPaused(bool paused) {
         const bool was = s_paused.exchange(paused);
         if (was == paused) {
             return;
