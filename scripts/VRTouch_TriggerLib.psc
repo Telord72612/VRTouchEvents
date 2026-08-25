@@ -2175,7 +2175,66 @@ String Function V3GearWhere(Int slotMask) Global
     if Math.LogicalAnd(slotMask, 4194304) == 4194304       ; 52 pelvis
         return "over their hips"
     EndIf
+    ; ★ THE DD / ZaZ CUSTOM SLOTS (2026-08-24). Measured in play: ZaZ cuff sets
+    ; and collars came through the ORDINARY-GEAR path - they are scriptless
+    ; plain armors with no DD class - and every one of them fell through to the
+    ; generic "on their body". A collar that "sits on their body" is a worse
+    ; sentence than no sentence.
+    ;   'Copper Wrist Cuffs'        slot 536870912 -> 59
+    ;   'Cuffs (Leather) (Legs)'    slot   8388608 -> 53
+    ;   'Cuffs (Leather) (Collar)'  slot     32768 -> 45
+    ; These are DD/ZaZ conventions rather than vanilla, which is why they are
+    ; below the vanilla rows: a piece that occupies BOTH keeps its vanilla
+    ; answer, which is the more meaningful one.
+    if Math.LogicalAnd(slotMask, 16384) == 16384           ; 44 gag
+        return "over their mouth"
+    EndIf
+    if Math.LogicalAnd(slotMask, 33554432) == 33554432     ; 55 blindfold
+        return "across their eyes"
+    EndIf
+    if Math.LogicalAnd(slotMask, 32768) == 32768           ; 45 collar
+        return "around their neck"
+    EndIf
+    if Math.LogicalAnd(slotMask, 65536) == 65536           ; 46 armbinder
+        return "on their arms"
+    EndIf
+    if Math.LogicalAnd(slotMask, 536870912) == 536870912   ; 59 wrist cuffs
+        return "at their wrists"
+    EndIf
+    if Math.LogicalAnd(slotMask, 8388608) == 8388608       ; 53 ankle cuffs
+        return "at their ankles"
+    EndIf
+    if Math.LogicalAnd(slotMask, 524288) == 524288         ; 49 belt / underwear
+        return "over their hips"
+    EndIf
+    if Math.LogicalAnd(slotMask, 262144) == 262144         ; 48 anal plug
+        return "between their legs"
+    EndIf
+    if Math.LogicalAnd(slotMask, 134217728) == 134217728   ; 57 vaginal plug
+        return "between their legs"
+    EndIf
     return "on their body"
+EndFunction
+
+; --- "a" or "an"? -----------------------------------------------------------
+; Measured in play, 2026-08-24: "Telord just put Grand Soulgem Anal Plug on
+; Carmella, a Anal Plug between their legs...". The article was hardcoded "a ",
+; and four of the forty device types start with a vowel - anal plug, armbinder,
+; elbow armbinder, elbow tie.
+;
+; ⚠ Note the CAPITALS in that measured line, which V3DDType never returns: its
+; row is the literal "anal plug". Papyrus's global string cache is
+; case-INSENSITIVE, so our literal resolved to an identically-spelled string
+; interned earlier with different casing - the same quirk that killed the two
+; V3Lower attempts. Nothing to fix in the table; just never assume the case you
+; wrote is the case that comes back.
+String Function V3Article(String noun) Global
+    String c = StringUtil.GetNthChar(noun, 0)
+    if c == "a" || c == "e" || c == "i" || c == "o" || c == "u" \
+    || c == "A" || c == "E" || c == "I" || c == "O" || c == "U"
+        return "an "
+    EndIf
+    return "a "
 EndFunction
 
 String Function V3DDWearerLine(String playerName, String npcName, String devName, \
@@ -2184,8 +2243,9 @@ String Function V3DDWearerLine(String playerName, String npcName, String devName
     if nm == ""
         nm = "a device"
     EndIf
-    String line = playerName + " just put " + nm + " on " + npcName + ", a " \
-        + V3DDType(cls) + " " + V3DDWhere(cls) + " that " + V3DDDoes(cls) + "."
+    String ty = V3DDType(cls)
+    String line = playerName + " just put " + nm + " on " + npcName + ", " \
+        + V3Article(ty) + ty + " " + V3DDWhere(cls) + " that " + V3DDDoes(cls) + "."
     if quest
         line = line + " It is locked on, and the lock will not answer any key they have."
     ElseIf locked
@@ -2202,8 +2262,9 @@ String Function V3DDWitnessLine(String playerName, String npcName, String devNam
     if nm == ""
         nm = "a device"
     EndIf
-    String line = playerName + " fitted " + nm + " onto " + npcName + " — a " \
-        + V3DDType(cls) + ", " + V3DDWhere(cls) + "."
+    String ty = V3DDType(cls)
+    String line = playerName + " fitted " + nm + " onto " + npcName + " — " \
+        + V3Article(ty) + ty + ", " + V3DDWhere(cls) + "."
     if locked
         line = line + " It locked shut."
     EndIf
