@@ -11,9 +11,10 @@
 //   "VRTE_ContactUpdate"  once per ~1 s while the session lives (after first emit)
 //   "VRTE_ContactEnd"     session over
 //
-//   sender = the touched NPC (Form); numArg = primary contact duration in
-//   seconds (on End: the session's total live duration); strArg = exactly 16
-//   pipe-separated fields — see the contract block in PpbBridge.cpp.
+//   sender = the touched NPC (Form); numArg = the session's duration in
+//   seconds (on End: its total live duration); strArg = exactly 35
+//   pipe-separated fields, up to FOUR source lanes (right hand, left hand, the
+//   player's head, the player's genital) — see the contract block in PpbBridge.cpp.
 //
 // WHY RAW, NOT DIGEST: the digest reports one contact per (actor, wand, REGION)
 // keyed to the LONGEST-dwelt capsule — after 2 s on the chest ring and 0.25 s
@@ -24,10 +25,10 @@
 //
 // Driver: PPB's AddTouchCallback fires on the MAIN thread at apiHz (~4/s)
 // while any contact lives; the callback is used purely as a tick signal (a
-// >= 0.2 s guard, then one sweep of GetRawContacts). A short SKSE-task pump
-// keeps ticking after the last PPB callback so lingering sessions still get
-// their VRTE_ContactEnd. Everything (sweep, emits, reset) runs on the main
-// thread — no locks, no task handoff for the events themselves.
+// >= 0.2 s guard, then one sweep of GetRawContacts). There is no pump: a
+// lingering session is closed by the next PPB callback. Everything (sweep,
+// emits, reset, the TakePushContact native) runs on the main thread under one
+// recursive lock (belt-and-braces) — no task handoff for the events themselves.
 //
 // BOOT-SAFE: PPB absent / too old / callback table full => one log line and
 // the bridge stays inert.
@@ -63,4 +64,15 @@ namespace PpbBridge {
     // which includes "PPB does not send the byte yet" (see the GenLevelEntry
     // banner in the .cpp). Cheap array scan; main thread.
     int GetErectionLevel(std::uint32_t actorFormId);
+
+    // ★ 2026-09-13: the player's contact that made a PPB_PushReaction - on her head / belly / chest / back /
+    // thigh / pelvis for push / shove / dropped, on her legs for sweeped (the user's rulings). Marks it TAKEN for
+    // 5 s (no Contact/Update names it) and returns its 8 clause fields "W|SRC|NAME|PART|SUB|DEP|DIST|DUR", or ""
+    // when there is none.
+    // wand = PPB's named pusher "R" / "L" (build 20105), "" = unknown: that hand's contact wins when it qualifies.
+    std::string TakePushContact(std::uint32_t actorFormId, const std::string& kind, const std::string& wand);
+
+    // ★ 2026-09-13: a two-hand undress is running on her - both HAND lanes are left out of every Contact / Update
+    // for `secs` (0-30). Called again at the End with a short tail; the latest call wins.
+    void TakeGestureLanes(std::uint32_t actorFormId, double secs);
 }

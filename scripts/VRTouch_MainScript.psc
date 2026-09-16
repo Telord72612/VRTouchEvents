@@ -22,7 +22,7 @@ Keyword kwMagicRestoreHealth    ; Skyrim.esm:01CEB0 — tags Restoration heal-sp
 ; ================================================================
 Bool  Property EnableDebug     = False Auto
 Bool  Property EnableDebugGrab = False Auto
-Float Property GlobalCooldown  = 15.0  Auto
+Float Property GlobalCooldown  = 10.0  Auto   ; ★ 2026-09-13 user: 15 -> 10 s ("15 can be really long"); Setup migrates saves
 Float Property DelayMultiplier = 1.0   Auto
 
 ; Optional: set via CK to a SNDR record pointing to a choking sound WAV.
@@ -45,6 +45,7 @@ Bool   sceneActive  = False  ; cached SexLab/OStim scene state (scene-suppressio
 Float  sceneCheckAt = 0.0    ; realtime the scene state was last re-tested
 Bool   modOff       = False  ; TRUE while the mod is fully unregistered for a scene
 Actor  sceneActor            ; the in-scene actor that triggered the shutdown
+Race   manakinRace           ; cached by CanWitness - a mannequin never witnesses anything (2026-09-10)
 Int    sceneEndGrace = 0     ; consecutive "scene ended" polls before re-arming
 
 ; (The V2 per-NPC cooldown ring, cdActor/cdTime, was deleted with
@@ -63,6 +64,9 @@ Armor lastArmor
 ; HIGGS grip on her throat as a single in-band fact.  neckActor/neckTime and
 ; IsGrabbingChest (the old 5-second chest-grab <-> neck-marker correlation)
 ; are gone with the rest of the marker system.
+Keyword kwPlugVaginal               ; DD zad_DeviousPlugVaginal, None if DD absent
+Keyword kwPlugAnal                  ; DD zad_DeviousPlugAnal
+Keyword kwPlugAny                   ; DD zad_DeviousPlug (bare)
 Bool   chokeActive          = False  ; choke state machine running
 Actor  chokeActor           = None   ; NPC being choked
 Float  chokeStartTime       = 0.0    ; realtime when choke began
@@ -84,7 +88,10 @@ Bool   chokeFiredWitnessed  = False  ; 7s public-witness trigger fired?
 Bool   chokeWarnedNoSound   = False  ; warned once that ChokingSound property is unset?
 Bool   chokeIsKillRun       = False  ; choke target is already KO'd — count toward kill, not passout
 Bool   chokeIsLeft          = False  ; which hand's controller grip holds the throat (liveness poll)
-Bool   chokeFiredThought7   = False  ; 7s choke panic-thought pushed to victim?
+; ★ THE CHOKE PROMPT BLOCK (2026-09-12, the user's design) - see ChokeBlockFor / ChokeRecoveryFor.
+Bool   chokeFired3          = False  ; the 3s milestone fired: the choke has LANDED and the choke block is up
+; (chokeRecActor/Left/Stamp/Severity are GONE, 2026-09-12: the recovery countdown now lives in
+;  VRTouchEvents.dll beside the native decorator that serves it - VRTouchEvents_Native.SetChokeRecovery.)
 Float  chokeEndTime         = 0.0    ; realtime a choke last ENDED — re-arm lockout
 Actor  chokeLastRelActor    = None   ; last actor a release-tier fired for — debounce
 Float  chokeLastRelTime     = 0.0    ; realtime of that release — debounce
@@ -98,7 +105,58 @@ Float  chokeLastRelTime     = 0.0    ; realtime of that release — debounce
 Actor[] koActor
 Float[] koWakeHour       ; absolute game-time hour when slot i auto-wakes
 Float[] koHealRate       ; saved HealRate to restore on wake
-Float[] koHpAtKO         ; Health at KO time — an external heal (potion OR spell) raising it wakes them
+Float[] koHpAtKO         ; ★ 2026-09-12: -2.0 = STILL SETTLING (no wake test yet); otherwise the Health she settled
+                         ; at, kept for the receipts only. The wake is ABSOLUTE now: Health >= 50% (down at 25%)
+Float[] koAtReal         ; ★ 2026-09-12 realtime of the knockout - the settle clock and the receipts only. WIPED every load
+Float   koNextTick = 0.0 ; ★ 2026-09-12 realtime the next TickKO may run (a real 5s cadence). WIPED every load
+Int[]   koPotionMask     ; ★ 2026-09-12 which Smart NPC Potions abilities this slot's NPC lost at KO (bit0 base,
+                         ;   bit1 Mage, bit2 Assassin) - given back on wake. PERSISTS with the slot, unlike the stamps
+Spell   spNpcPotion         ; Smart_NPC_Potions.esp 0xD62 NPCpotions_Spell         (None when the mod is absent)
+Spell   spNpcPotionMage     ; Smart_NPC_Potions.esp 0x80A NPCpotions_SpellMage
+Spell   spNpcPotionAssassin ; Smart_NPC_Potions.esp 0x80B NPCpotions_SpellAssassin
+
+; ★★ THE MARKER FACTION (2026-09-12, third design) - VRTouchEvents.esp 0x804 VRTE_ChokeStateFaction.
+; The prompt blocks read it with SkyrimNet's BUILT-IN get_faction_rank, which reads the actor at render
+; time: rank 1 = being choked (0796) · 2 = recovery moderate · 3 = recovery severe (0797) · 4 = just woke
+; (0798). Not a member = no block. See VRTEMark.
+Faction vrteStateFaction
+; ★★ THE KISS (PPB build 20103, VR-verified by PPB 2026-09-12). ONE mod event is the kiss:
+; PPB_MouthLips, strArg "R|LIPS|HEAD" (field 3 HEAD = the player's MOUTH on her upper lip), numArg 1
+; started / 0 ended, sender = her. One ON + one OFF per kiss (PPB hysteresis 2.2 / 3.2 u), no dwell.
+; PPB tracks ONE NPC at a time, so one slot is enough. Realtime stamps - WIPED every load.
+Actor kissActor     = None   ; who is being kissed right now
+Float kissStartAt   = 0.0    ; realtime the kiss started
+Bool  kissSaid      = False  ; the kiss narration has gone out for this kiss
+Actor kissLastActor = None   ; who the last kiss was on
+Float kissMuteUntil = 0.0    ; realtime: HEAD-source touch narration on kissLastActor stays muted until then
+; ★ THE KISS TRAIL (2026-09-13): the NPC whose mouth clause the kiss mute last dropped, and until when that
+; still counts. Her next mouth line passes the clocks KissSpeak stamped, once. Realtime - WIPED every load.
+Actor kissTrailActor = None
+Float kissTrailUntil = 0.0
+; ★ THE KISS RING (fix list 41 V5, 2026-09-13): the NPC whose kiss was last SPOKEN, and until when a new kiss on her
+; stays quiet (5 s after that kiss chain's last END). PPB's lips gate has 1 u of hysteresis, so a head bobbing at the
+; exit gate re-arms the kiss every ~1 s, and each one was a GLOBAL interrupt. The first kiss always speaks; a quiet one
+; that ends extends the chain. Realtime - WIPED every load.
+Actor kissRingActor = None
+Float kissRingUntil = 0.0
+; ★★ THE PUSH REACTIONS (PPB build 20104). PPB_PushReaction, strArg "<kind>|<NPC name>", sender = her.
+; The user's 2026-09-13 rulings: a "push" is HELD 3 s in case it turns into a shove or a fall (one event per
+; interaction), and after a push or shove line goes out on her the next one waits 5 s. dropped / sweeped go
+; out at once, always. Realtime - WIPED every load.
+Actor[]  pushCdActor    ; last push/shove LINE sent on her (the shared 5 s)
+Float[]  pushCdAt
+Actor[]  pushHoldActor  ; a push waiting out its 3 s
+Float[]  pushHoldAt
+String[] pushHoldHow    ; the contact that made it (TakePushContact), "" if none
+Int[]    pushHoldState  ; 0 held · 1 being sent · 2 replaced while being sent (that send aborts)
+String[] pushHoldKind   ; ★ V9 (fix list 41): "push" (held 3 s) or "shove" (held 0.5 s) - see PushHoldSecs
+
+; Who currently holds a rank, so a load can take every one back off (faction membership persists in the
+; save; a choke and its after-states do not). vmUntil is a REALTIME deadline - WIPED every load.
+Actor[] vmActor
+Int[]   vmRank
+Float[] vmUntil
+Float   vmTraceAt = 0.0   ; ★ realtime of the next "MARK tick" receipt (<= one per 30 s) - WIPED every load
 Bool    koTicking = False ; true if OnUpdate is re-arming for KO tick
 
 ; ================================================================
@@ -187,6 +245,27 @@ Actor[] v3CdActor                    ; V3 per-NPC cooldown ring (16 slots)
 Float[] v3CdTime                     ; last fire of ANY kind
 Float[] v3CdIntimateTime             ; last fire of an INTERRUPT-tier contact
 Actor[] v3PendActor                  ; delay-wait ring: contact seen, dwell not yet met
+; ★ THE SUSTAIN RING (2026-09-12, the user's design). A contact that fired QUIETLY -
+; persistent or thought - is remembered here; if the same hold is still on the same part at 2x its dwell (cap 6s) it
+; upgrades ONCE to a plain DirectNarration. Kept apart from the pending ring on purpose:
+; pending = "dwell not met yet", sustain = "already fired quietly and still being held".
+Actor[]  v3SusActor
+String[] v3SusKey
+Float[]  v3SusAt                     ; the held CLAUSE's own duration at which the upgrade fires
+String[] v3SusW                      ; ★ 2026-09-13: which source lane held it (R / L / H / G)
+; ★★ THE VOICED-LANES RING (2026-09-13). Bits of the source lanes (R 1 · L 2 · H 4 · G 8) that already went
+; out in this NPC's current bridge session. A combined line names every clause, but only a lane that has NOT
+; been voiced decides its dwell, its tier and its cooldown - a lane that joins late is judged on its own, and a
+; hand that was already narrated is never re-sent just because another source arrived (review 2026-09-13).
+; ★ THE ONE-LINE WAIT (2026-09-13): the NPC whose ready line waits one update so a contact about to ripen joins it,
+; the payload it would have sent, and when. WaitTick re-sends it past 1.2 s; her session End re-sends it too.
+Actor    waitActor  = None
+String[] waitF
+Float    waitArgDur = 0.0
+Float    waitAt     = 0.0
+Actor[] v3VoicedActor
+Int[]   v3VoicedMask
+Float[] v3VoicedAt      ; realtime of the last write per slot (the oldest is reused when full)
 
 ; ================================================================
 ; DEPRECATED — the per-actor coverage ring.
@@ -230,14 +309,30 @@ Int   v3nGrabGate     = 0            ; blocked by the optional grab-suppression 
 Int   v3nCombatHit    = 0            ; weapon contact that was a real combat hit
 Int   v3nChokeArm     = 0            ; chokes armed from PPB Neck+GRAB
 Int   v3nPersistent   = 0            ; dispatched as a persistent event (4th tier)
+Int   v3nSustain      = 0            ; persistent holds upgraded to a DirectNarration (the sustain ring)
 Int   v3nGenSource    = 0            ; contacts sourced from the player's genitals (PPB gates them)
+Int   v3nMouthSource  = 0            ; contacts sourced from the player's mouth (HEAD:mouth - narrated as a kiss)
 Int   v3nHoverDrop    = 0            ; interior key claimed while HOVERING outside the capsule
 Int   v3nUndressArm   = 0            ; AddOn said an undress armed
 Int   v3nUndressGate  = 0            ; grab narration suppressed because an undress is running
 Int   v3nUndressFire  = 0            ; undress narrated (the piece actually came off)
-Int   v3nMasturbation = 0            ; masturbation events received from the AddOn
+Int   v3nMasturbation = 0            ; PPB_PlayerMasturbation events received (VRTE's own since 2026-09-13)
+Float mastLastAt      = 0.0          ; realtime of the last masturbation line (30 s cooldown) - WIPED every load
 Int   v3nGearEquip    = 0            ; ordinary gear equipped on an NPC by hand
+Int   v3nGearOff      = 0            ; ordinary gear pulled off by hand and narrated (2026-09-13)
+Int   v3nGearNaked    = 0            ; ...of which the body piece left her naked
+Int   v3nGearOffCd    = 0            ; a removal line dropped: another removal line on her under the cooldown
+Int   v3nGearStayed   = 0            ; PPB announced a removal but the piece was still worn - nothing narrated
+Int   v3nGearHeld     = 0            ; a held piece of armour touching her - dropped, never narrated as a touch
+Int   v3nGearRefused  = 0            ; PPB_GestureEquipRefused received (a hand equip that did not happen)
+Int   v3nDeviceEffect = 0            ; a worn device fired (vibration / shock)
 Int   v3nDevice       = 0            ; DD/ZaZ devices equipped and narrated
+Int   v3nPlugGate     = 0            ; interior contact dropped: that orifice is plugged
+Int   v3nPlugOut      = 0            ; a plug was drawn out and narrated
+Int   v3nAftermath    = 0            ; short-lived after-effect states registered
+Int   v3nPlugIn       = 0            ; a plug was installed and narrated
+Int   v3nMenuOn       = 0            ; DD device equipped off-hand (menu, key, script)
+Int   v3nMenuOff      = 0            ; DD device removed off-hand
 Float v3ReportAt      = 0.0          ; realtime the next report may print
 ; Ring of PPB sub-region names already reported as unmapped, so a name PPB
 ; renames or adds is shouted ONCE rather than every 0.25s.
@@ -263,6 +358,23 @@ EndEvent
 ; from the old event: 2s settle, full Setup() (which re-registers HIGGS),
 ; then stuck-choke recovery.
 Function OnGameReload()
+    ; ★ 2026-09-13: a push held across a save must not be sent by a saved OnUpdate during the wait below (its
+    ; realtime stamp is meaningless after a load). Setup re-allocates the rings anyway.
+    if pushHoldActor.Length >= 4
+        Int ph = 0
+        while ph < 4
+            pushHoldActor[ph] = None
+            ph += 1
+        EndWhile
+    EndIf
+    ; The same for a removal waiting to be confirmed (gear): the piece and its stamp belong to the old session.
+    if gearOffActor.Length >= 4
+        Int gq = 0
+        while gq < 4
+            gearOffActor[gq] = None
+            gq += 1
+        EndWhile
+    EndIf
     Utility.Wait(2.0)
     Setup()
 
@@ -284,9 +396,24 @@ Function Setup()
 
     ; Cache armor keywords
     kwArmorHeavy = Game.GetFormFromFile(0x0006BBD2, "Skyrim.esm") as Keyword
+    ; ⛔ DD PLUG KEYWORDS - the plugged-orifice gate is UNSAFE without them.
+    ; That gate reads biped slot 57 / 48, and those slots are NOT plug-exclusive
+    ; in a real load order: of the first 40 armors on slot 57 here, 39 are plugs
+    ; and one is `aaaDDShoulder` (Dark Dreams.esl), a shoulder piece. An NPC in
+    ; that armor would have her intimate ladder silenced permanently, with
+    ; nothing anywhere to say why. The slot must be confirmed by a keyword.
+    ;
+    ; Soft dependency: GetFormFromFile returns None when DD is absent, every use
+    ; below is None-guarded, and a None keyword simply disables the gate - which
+    ; is correct, because without DD there are no plugs to gate on.
+    ; FormIDs verified against the live load order; identical in DD 5.2 and NG.
+    kwPlugVaginal = Game.GetFormFromFile(0x01DD7C, "Devious Devices - Assets.esm") as Keyword
+    kwPlugAnal    = Game.GetFormFromFile(0x01DD7D, "Devious Devices - Assets.esm") as Keyword
+    kwPlugAny     = Game.GetFormFromFile(0x003331, "Devious Devices - Assets.esm") as Keyword
     ; Vanilla Restoration heal-spell keyword (tags Healing, Healing
-    ; Hands, Grand Healing, Close Wounds, etc. MGEFs).  Used by the
-    ; choke passout recovery: any NPC-targeted heal spell wakes them.
+    ; Hands, Grand Healing, Close Wounds, etc. MGEFs).
+    ; ★ 2026-09-12: RECEIPTS ONLY now. It used to wake a KO'd NPC by its mere presence;
+    ; the user's rule is "wake at 50% HP", which a real heal reaches on its own.
     kwMagicRestoreHealth = Game.GetFormFromFile(0x0001CEB0, "Skyrim.esm") as Keyword
     ; VRTouch_ChokingSound SNDR (VRTouchEvents.esp:000801) — points at
     ; sound/choking.wav via SoundOutputModel 000802.  Loaded here so the
@@ -315,9 +442,9 @@ Function Setup()
         koTicking = False
     EndIf
     ; koHpAtKO is a newer array — allocate independently so an existing save
-    ; (koActor already sized, koHpAtKO None) gets it.  -1 disables the HP-rise
-    ; wake for any slot occupied before this update (those fall back to the
-    ; wake timer / heal-spell keyword), so no false wake on load.
+    ; (koActor already sized, koHpAtKO None) gets it.  (Since 2026-09-12 the wake
+    ; test is absolute - Health >= 50% - so this value is only the settle marker
+    ; and a receipt; -1 on an old slot changes nothing.)
     if koHpAtKO.Length < 10
         koHpAtKO = new Float[10]
         Int kh = 0
@@ -326,6 +453,97 @@ Function Setup()
             kh += 1
         EndWhile
     EndIf
+    ; ★ 2026-09-12 THE SETTLE CLOCK, and the KO cadence. Both are REALTIME, and
+    ; Utility.GetCurrentRealTime() restarts at zero on every game launch - a stamp carried in
+    ; from a save made later in a longer session reads as a moment in the FUTURE. So both are
+    ; wiped on every load, never merely sized. A slot restored from a save is long settled:
+    ; koAtReal 0.0 makes the next TickKO take its baseline at once.
+    koAtReal   = new Float[10]
+    koNextTick = 0.0
+    ; Which Smart NPC Potions abilities each KO slot's NPC lost: persists WITH the slot (a KO survives
+    ; a save), so it is sized, never wiped.
+    if koPotionMask.Length < 10
+        koPotionMask = new Int[10]
+    EndIf
+    ; ★ 2026-09-12 the user's ruling: a knocked-out NPC must not wake herself on her OWN potion. Smart
+    ; NPC Potions gives NPCs an ability and the AI drinks when hurt - measured in VR, both Carmella and
+    ; Sofia "cast an unknown spell" ~1 s after StartKOSlot dropped them to 25%, then climbed ~4.8 HP/s
+    ; (CACO potions heal over time) to the 50% wake. Soft dependency: all three None without the mod.
+    spNpcPotion         = Game.GetFormFromFile(0x000D62, "Smart_NPC_Potions.esp") as Spell
+    spNpcPotionMage     = Game.GetFormFromFile(0x00080A, "Smart_NPC_Potions.esp") as Spell
+    spNpcPotionAssassin = Game.GetFormFromFile(0x00080B, "Smart_NPC_Potions.esp") as Spell
+
+    ; ★★ THE MARKER FACTION. Every rank still on an actor from before this load comes OFF: a choke never
+    ; survives a load, so neither do its prompt states. (The ring is the list of who holds one; its
+    ; realtime deadlines are meaningless after a relaunch, so the ring is wiped once they are removed.)
+    vrteStateFaction = Game.GetFormFromFile(0x000804, "VRTouchEvents.esp") as Faction
+    if vmActor.Length == 8 && vrteStateFaction
+        Int vmi = 0
+        while vmi < 8
+            if vmActor[vmi] != None
+                vmActor[vmi].RemoveFromFaction(vrteStateFaction)
+                Debug.Trace("[V3] MARK cleared on load: " + vmActor[vmi].GetDisplayName())
+            EndIf
+            vmi += 1
+        EndWhile
+    EndIf
+    vmActor = new Actor[8]
+    vmRank  = new Int[8]
+    vmUntil = new Float[8]
+    vmTraceAt = 0.0
+    ; ★ V19: a KO slot DOES survive a load, so its rank 5 is put back (the loop above may have taken it off with a
+    ; choke state, and a save from before V19 never had it).
+    if vrteStateFaction && koActor.Length >= 10
+        Int kr = 0
+        while kr < 10
+            if koActor[kr] != None && !koActor[kr].IsDead()
+                KOMarkOn(koActor[kr])
+            EndIf
+            kr += 1
+        EndWhile
+    EndIf
+    Debug.Trace("[V3] marker faction " + vrteStateFaction + " | Smart NPC Potions abilities: " + spNpcPotion + " " + spNpcPotionMage + " " + spNpcPotionAssassin)
+    if !vrteStateFaction
+        Debug.Trace("[V3] !! VRTE_ChokeStateFaction NOT FOUND in VRTouchEvents.esp - the choke / recovery / wake prompt blocks cannot show")
+    EndIf
+    RegisterForModEvent("VRTE_RepliesDone", "OnVRTERepliesDone")
+
+    ; ★★ THE KISS (PPB build 20103). A kiss never survives a load (PPB sends no mouth event across
+    ; one), and every kiss stamp is realtime - all wiped. Registered here, not in SetTouchSinks: PPB
+    ; itself never raises a kiss inside an OStim/SexLab scene, and OnPPBMouthLips checks modOff anyway.
+    kissActor     = None
+    kissStartAt   = 0.0
+    kissSaid      = False
+    kissLastActor = None
+    kissMuteUntil = 0.0
+    RegisterForModEvent("PPB_MouthLips", "OnPPBMouthLips")
+    ; ★★ THE PUSH REACTIONS (PPB build 20104). Registered here, not in SetTouchSinks: PPB's push system
+    ; never runs on scene bodies, and OnPPBPushReaction checks modOff / the scene gate anyway.
+    pushCdActor   = new Actor[4]
+    pushCdAt      = new Float[4]
+    pushHoldActor = new Actor[4]
+    pushHoldAt    = new Float[4]
+    pushHoldHow   = new String[4]
+    pushHoldState = new Int[4]
+    pushHoldKind  = new String[4]
+    kissTrailActor = None
+    kissTrailUntil = 0.0
+    kissRingActor  = None
+    kissRingUntil  = 0.0
+    mastLastAt     = 0.0
+    waitActor      = None
+    waitAt         = 0.0
+    ; ★ THE TOUCH COOLDOWN 15 -> 10 s (user, 2026-09-13: "let's bring it down to 10 second instead. 15 can be
+    ; really long"). GlobalCooldown is an Auto Property, so an existing save keeps the OLD 15.0 whatever the
+    ; script default says - migrate that exact value once. A value someone set by hand (setpqv) is left alone.
+    if GlobalCooldown == 15.0
+        GlobalCooldown = 10.0
+        Debug.Trace("[V3] touch cooldown migrated 15 -> 10 s (user ruling 2026-09-13)")
+    EndIf
+    RegisterForModEvent("PPB_PushReaction", "OnPPBPushReaction")
+    ; ★★ MASTURBATION (2026-09-13, the user: "it's a VRTE by product ... the AddOn will be DD specific action and
+    ; VR integration"). PPB's own event, consumed directly - the DD SN side no longer relays or narrates it.
+    RegisterForModEvent("PPB_PlayerMasturbation", "OnPPBPlayerMasturbation")
     ; If saved with any KO slots active, re-arm the tick loop.
     Int kj = 0
     Bool hasKO = False
@@ -348,12 +566,27 @@ Function Setup()
     ; is OFF by default (it costs LLM tokens per touch).  The FOMOD "Arousal"
     ; option installs a patch whose IsEnabled() returns True.  Same stub-override
     ; pattern as the SexLab/OStim/GrabGate gates.
-    arousalEnabled = ((Game.GetModByName("OSLAroused.esp") != 255) || (Game.GetModByName("SexLabAroused.esm") != 255)) && VRTouch_ArousalGate.IsEnabled()
-    if arousalCdActor.Length < 16
-        arousalCdActor = new Actor[16]
-        arousalCdTime  = new Float[16]
-    EndIf
+    ; ★ 2026-09-11 DIAGNOSTIC — arousal has fired ZERO times across 6 measured sessions
+    ; (5x SkyrimNet 0.23.1 + Beta 25 RC7: no SendCustomPromptToLLM for vrtouch_arousal).
+    ; The three inputs are split out and traced UNCONDITIONALLY (one line per load) so the
+    ; next VR session says which one is false instead of us guessing. Behaviour unchanged.
+    Int  arOsl  = Game.GetModByName("OSLAroused.esp")
+    Int  arSla  = Game.GetModByName("SexLabAroused.esm")
+    Bool arGate = VRTouch_ArousalGate.IsEnabled()
+    arousalEnabled = ((arOsl != 255) || (arSla != 255)) && arGate
+    Debug.Trace("[V3] arousal init: OSLAroused.esp=" + arOsl + " SexLabAroused.esm=" + arSla + " gate=" + arGate + " -> arousalEnabled=" + arousalEnabled)
+    ; ⛔⛔ THE AROUSAL BUG (found 2026-09-12, after zero queries across every measured session).
+    ; This ring used to be sized once and then PRESERVED across loads. Its stamps are
+    ; Utility.GetCurrentRealTime(), a stopwatch that restarts at zero on EVERY GAME LAUNCH. A
+    ; stamp saved late in a long earlier session therefore loads as a moment in the future:
+    ; (now - stamp) is negative, negative is always < 12s, and that NPC sat on "12s per-actor
+    ; cooldown" until this launch's stopwatch overtook the old one - hours. Measured: 7 cooldown
+    ; skips in 13 minutes with not one query sent that session to have started a cooldown.
+    ; WIPED on every load now, and IsOnArousalCd also treats a negative age as expired.
+    arousalCdActor = new Actor[16]
+    arousalCdTime  = new Float[16]
     arousalPendingActor = None
+    arousalPendingTime  = 0.0
 
     ; --- Choke cleanup on reload ---
     ; Release activation block and clear all choke state.
@@ -370,7 +603,40 @@ Function Setup()
     chokeNextTick       = 0.0
     chokeFiredSustained = False
     chokeFiredWitnessed = False
+    chokeFired3         = False
     chokeLastContact    = 0.0
+    ; ★ 2026-09-12 THE REALTIME SWEEP - the arousal bug's whole class, not just that one ring.
+    ; Every stamp below is Utility.GetCurrentRealTime(), which restarts at zero each launch, so
+    ; each one read "in the future" after loading a save from a longer session:
+    ;   chokeEndTime     the 1s re-arm lockout -> (now - stamp) < 1.0 blocked EVERY choke
+    ;   chokeLastRelTime the 3s release debounce -> that NPC's release line never fired
+    ;   ddzUndressAt     the 20s stale guard -> a lost undress-arm muted her grab narration
+    ;   v3SceneAt        the 20-min scene backstop -> a saved-mid-scene flag muted ALL touches;
+    ;                    its own comment names "a save-load" as the case it protects, and that
+    ;                    was the exact case it could not survive
+    ;   faceExprClearAt  the 15s face clear -> a saved face never cleared
+    chokeEndTime        = 0.0
+    chokeLastRelActor   = None
+    chokeLastRelTime    = 0.0
+    ddzUndressActor     = None
+    ddzUndressAt        = 0.0
+    ddzUndressUntil     = 0.0
+    gearOffActor        = new Actor[4]
+    gearOffDue          = new Float[4]
+    gearOffName         = new String[4]
+    gearOffShow         = new String[4]
+    gearOffMask         = new Int[4]
+    gearOffTries        = new Int[4]
+    gearCdActor         = new Actor[8]
+    gearCdAt            = new Float[8]
+    ; Plugs stay with the AddOn's plug events while it is loaded (OnPPBUndressEnd / OnPPBDeviceEquipped).
+    ddAddOnLoaded       = (Game.GetModByName("DD SN AddOn.esp") != 255)
+    ddDatabaseLoaded    = (Game.GetModByName("DD SN Database.esp") != 255)
+    v3SceneFlag         = False
+    v3SceneAt           = 0.0
+    faceExprClearAt     = 0.0
+    v3DevNarrActor      = new Actor[16]
+    v3DevNarrAt         = new Float[16]
     ; Scene-shutdown state — clear it on every load.  modOff persists in the
     ; save; if the game was saved DURING a scene, this Setup re-registers all
     ; sinks below, so the mod IS on again and modOff must be False to match.
@@ -402,11 +668,34 @@ Function Setup()
     ; undress state machine and is the single source of truth for it.
     ; Registered in Setup ONLY, not in SetTouchSinks: the AddOn is deliberately
     ; un-gated during scenes (its own design call), so VRTE keeps listening.
-    RegisterForModEvent("VRTE_DDZaZ_UndressArm",   "OnDDZUndressArm")
-    RegisterForModEvent("VRTE_DDZaZ_UndressEnd",   "OnDDZUndressEnd")
-    RegisterForModEvent("VRTE_DDZaZ_Masturbation", "OnDDZMasturbation")
-    RegisterForModEvent("VRTE_DDZaZ_DeviceEquipped", "OnDDZDeviceEquipped")
-    RegisterForModEvent("VRTE_DDZaZ_GearEquipped",   "OnDDZGearEquipped")
+    ; ★★ THE NARRATION RE-HOME (2026-08-29, the user's ruling): the AddOn now
+    ; composes and sends EVERY event its own sinks generate - plug in/out,
+    ; menu on/off, device effects. (Masturbation came BACK to VRTE on 2026-09-13 - OnPPBPlayerMasturbation,
+    ; straight from PPB, no AddOn relay.) VRTE keeps only the
+    ; player's GESTURE equip/undress narration (it overrides the normal-gear
+    ; equip line) - and a pacing-only ear on the plug events, below.
+    ; ★★ ALL GEAR IS VRTE's, DEVICES INCLUDED (2026-09-13, the user's rulings, in order: "gears equip/unequip event will
+    ; be handled by VRTE for normal gears" -> "VRTE will narrate [a refused equip], it's not different from normal gears" ->
+    ; "for the DD and ZaZ equip, they still need to be narrated if equip without the AddOn ... do narrate them like normal
+    ; gears and all 'specific' stuff will come from the AddOn if it's in the modlist").
+    ; PPB's OWN gesture events are consumed directly, so every hand equip, undress and refused equip is narrated with or
+    ; without DD SN AddOn.esp. The AddOn's relays of the same events come OFF (their co-save registrations too) - they
+    ; would narrate twice. Its UndressEnd relay stays, read only for a DD device's real name and a refused DD unlock.
+    ; (The grip grace and the undress Arm's hand take are the DLL's: it hears PPB's events itself, same frame.)
+    UnregisterForModEvent("VRTE_DDZaZ_UndressArm")
+    UnregisterForModEvent("VRTE_DDZaZ_GearEquipped")
+    UnregisterForModEvent("VRTE_DDZaZ_DeviceEquipped")
+    UnregisterForModEvent("PPB_GestureUndressGrip")
+    RegisterForModEvent("PPB_GestureUndressArm",     "OnPPBUndressArm")
+    RegisterForModEvent("PPB_GestureUndressEnd",     "OnPPBUndressEnd")
+    RegisterForModEvent("PPB_GestureGearEquipped",   "OnPPBGearEquipped")
+    RegisterForModEvent("PPB_GestureDeviceEquipped", "OnPPBDeviceEquipped")
+    RegisterForModEvent("PPB_GestureEquipRefused",   "OnPPBEquipRefused")
+    RegisterForModEvent("VRTE_DDZaZ_UndressEnd",     "OnDDZUndressEnd")
+    RegisterForModEvent("VRTE_DDZaZ_PlugRemoved",    "OnDDZPlugRemoved")
+    RegisterForModEvent("VRTE_DDZaZ_PlugInserted",   "OnDDZPlugInserted")
+    ; ★ 2026-09-14: PPB's own plug edge, for the pacing stamp at the instant of the act (OnPPBGesturePlug).
+    RegisterForModEvent("PPB_GesturePlug",           "OnPPBGesturePlug")
 
     ; ★★ THE SCENE EDGES (2026-08-24). PPB found the reliable signal and this
     ; matches it: OStim and SexLab both announce a scene as SKSE mod events, and
@@ -419,23 +708,33 @@ Function Setup()
     RegisterForModEvent("AnimationStart",         "OnV3SceneStart")
     RegisterForModEvent("AnimationEnd",           "OnV3SceneEnd")
 
-    ; V3 dispatcher rings (preserved across loads, like cdActor).
-    if v3CdActor.Length < 16
-        v3CdActor = new Actor[16]
-        v3CdTime  = new Float[16]
-    EndIf
-    ; ⚠ v3CdIntimateTime is allocated INDEPENDENTLY, not inside the block
-    ; above.  On a save made before the two-tier cooldown existed, v3CdActor
-    ; is already sized 16, so that guard is false and this array would stay
-    ; None forever — every V3IsOnCooldown/V3RecordFire call would then bail
-    ; on its length check and the gate would silently never apply.
-    ; Same pattern, same reason, as koHpAtKO above.
-    if v3CdIntimateTime.Length < 16
-        v3CdIntimateTime = new Float[16]
-    EndIf
+    ; V3 dispatcher rings.
+    ; ★ 2026-09-12: the COOLDOWN rings are WIPED on every load, no longer "preserved across
+    ; loads". They carry realtime stamps and share the arousal ring's bug exactly: a stamp from a
+    ; longer earlier session loaded as a future moment and would have silenced every touch on
+    ; that NPC. (Allocating both unconditionally also retires the old trap where a save made
+    ; before the two-tier cooldown left v3CdIntimateTime None behind a sized v3CdActor.)
+    v3CdActor        = new Actor[16]
+    v3CdTime         = new Float[16]
+    v3CdIntimateTime = new Float[16]
     if v3PendActor.Length < 16
         v3PendActor = new Actor[16]
     EndIf
+    ; ★ THE SUSTAIN RING (2026-09-12). WIPED on every load, not just sized: the C++ bridge
+    ; drops every touch session at a load boundary, so an entry from before it could only
+    ; ever fire on somebody else's hold.
+    v3SusActor = new Actor[16]
+    v3SusKey   = new String[16]
+    v3SusAt    = new Float[16]
+    v3SusW     = new String[16]
+    ; ★ THE VOICED-LANES RING (2026-09-13): which source lanes already went out this session. A bridge
+    ; session never survives a load, so neither does this.
+    v3VoicedActor = new Actor[16]
+    v3VoicedMask  = new Int[16]
+    v3VoicedAt    = new Float[16]
+    ; The choke recovery block does not outlive a load either: a choke never survives one
+    ; (OnGameReload ends it), so neither does the after-state it left behind. That state now
+    ; lives in VRTouchEvents.dll, which clears it itself at kPreLoadGame / kNewGame.
     ; Unmapped-name ring: allocated once, wiped every load so a PPB update
     ; that renames a sub-region is shouted again in the new session rather
     ; than staying silent because the old session already warned.
@@ -453,12 +752,14 @@ Function Setup()
     ;   - TickChoke polls HiggsVR.GetGrabbedObject on both hands for choke
     ;     liveness (witness 1 of 2; witness 2 is chokeLastContact from PPB).
 
-    ; Register the SkyrimNet event schema.
-    ; Only vrtouch_contact remains.  The V2 `vrtouch_event` schema and the
-    ; two `vrtouch_weapon*` schemas were deleted with FireTrigger — nothing
-    ; emits those event types any more, and vrtouch_weapon/_alert were never
-    ; populated even in V2.
-    RegisterV3Schema()
+    ; (No SkyrimNet event schema any more - 2026-09-13. vrtouch_contact was registered on every Setup and never raised
+    ;  since the 2026-08-08 trigger cutover; RegisterV3Schema is removed with it.)
+
+    ; ★ THE CHOKE / RECOVERY / WAKE DECORATORS ARE REGISTERED NATIVELY (2026-09-12), by
+    ; VRTouchEvents.dll at kDataLoaded - NOT here. The first version called
+    ; VRTouch_Decorators.Register() from this spot; measured in VR, SkyrimNet refreshed those
+    ; Papyrus decorators 2-3 s AFTER each render, so the block ran a turn late. Do not restore
+    ; the call: a native decorator of the same name wins, and the Papyrus one would only fail.
 
     ; Open the dedicated Papyrus user log -> Documents\My Games\Skyrim VR\Logs\Script\User\VRTouchEvents.0.log
     ; (NOT the Steam/base-game folder — that must stay pristine.)
@@ -517,6 +818,42 @@ Function ScheduleNextUpdate()
         EndIf
     EndIf
 
+    ; ★ 2026-09-12: RegisterForSingleUpdate is last-call-wins, so this function must know every
+    ; deadline or it can push one out. It knew neither the KO ticker (a face-clear scheduled while an
+    ; NPC was knocked out could delay her 5 s TickKO) nor the marker faction's time limits.
+    if koTicking
+        Float w = koNextTick - now
+        if w < 0.05
+            w = 0.05
+        EndIf
+        if w < nextWake
+            nextWake = w
+        EndIf
+    EndIf
+    Float mw = VRTEMarkTick(now)
+    if mw < nextWake
+        nextWake = mw
+    EndIf
+    Float kw2 = KissWait(now)
+    if kw2 < nextWake
+        nextWake = kw2
+    EndIf
+    ; ★ 2026-09-13: a push held 3 s in case it becomes a shove or a fall.
+    Float pw2 = PushWait(now)
+    if pw2 < nextWake
+        nextWake = pw2
+    EndIf
+    ; ★ 2026-09-13: a touch line waiting one update to combine with another contact.
+    Float ww2 = WaitWait(now)
+    if ww2 < nextWake
+        nextWake = ww2
+    EndIf
+    ; ★ 2026-09-13: a gear removal waiting for the piece to actually come off.
+    Float gw2 = GearOffWait(now)
+    if gw2 < nextWake
+        nextWake = gw2
+    EndIf
+
     ; While OFF for a scene, force a <=1s heartbeat so the scene-end poll keeps
     ; firing even when no ticker is active, and so a late arousal callback's
     ; ~15s face-clear schedule can't push the heartbeat out (last-call-wins).
@@ -562,11 +899,24 @@ Event OnUpdate()
     ; --- KO slot ticker ---
     ; Fires every 5s while any NPC is in KO state.  Independent of
     ; chokeActive — outlives the active choke by hours of game time.
+    ; ⛔ FIXED 2026-09-12 — "every 5s" was only ever this comment. TickKO ran on EVERY
+    ; OnUpdate, and during a choke OnUpdate fires every 0.5 s (the choke ticker), so the
+    ; heal-detector checked a freshly knocked-out NPC HALF A SECOND after StartKOSlot and
+    ; every half second after. Measured in VR: Carmella passed out at 15 s and was on her
+    ; feet at once; the next grab ran as a normal choke, not the kill-run, which proves the
+    ; KO slot had already been released. koNextTick makes the cadence real.
     if koTicking
-        TickKO()
+        if now >= koNextTick
+            TickKO()
+            koNextTick = Utility.GetCurrentRealTime() + 5.0
+        EndIf
         if koTicking
-            if 5.0 < nextWake
-                nextWake = 5.0
+            Float kw = koNextTick - now
+            if kw < 0.05
+                kw = 0.05
+            EndIf
+            if kw < nextWake
+                nextWake = kw
             EndIf
         EndIf
     EndIf
@@ -607,6 +957,37 @@ Event OnUpdate()
                 nextWake = w
             EndIf
         EndIf
+    EndIf
+
+    ; ★ 2026-09-12: the marker faction's time limits (recovery 180 s backstop, wake 60 s). Checked
+    ; LAST, after TickKO and TickChoke, so a marker one of them just set is counted in nextWake.
+    Float markW = VRTEMarkTick(now)
+    if markW < nextWake
+        nextWake = markW
+    EndIf
+    ; ★ THE KISS: speak it once the 0.5 s dwell has passed with the kiss still up.
+    KissTick(now)
+    Float kissW = KissWait(now)
+    if kissW < nextWake
+        nextWake = kissW
+    EndIf
+    ; ★ THE PUSH HOLD (2026-09-13): send a push that stayed a push for 3 s.
+    PushTick(now)
+    Float pushW = PushWait(now)
+    if pushW < nextWake
+        nextWake = pushW
+    EndIf
+    ; ★ THE ONE-LINE WAIT's deadline (2026-09-13).
+    WaitTick(now)
+    Float waitW = WaitWait(now)
+    if waitW < nextWake
+        nextWake = waitW
+    EndIf
+    ; ★ THE GEAR REMOVAL CHECK (2026-09-13): narrate a pulled piece once it is really off.
+    GearOffTick(now)
+    Float gearW = GearOffWait(now)
+    if gearW < nextWake
+        nextWake = gearW
     EndIf
 
     ; While OFF for a scene, force a <=1s heartbeat so the scene-end poll keeps
@@ -677,6 +1058,11 @@ Function EnterSceneOff(Actor a)
     ; event dispatch).  VRTouchEvents-only — cbp.dll collision/physics/haptic and
     ; any chained hook keep running.  Harmless no-op if the DLL lacks this native.
     VRTouchEvents_Native.SetScenePaused(True)
+    ; ★ 2026-09-12: a scene that starts mid-choke takes the choke block down (the old Papyrus
+    ; ChokeBlockFor tested !modOff on every read; the native decorator is told instead).
+    if chokeActive && chokeActor != None && VRTEStateRank(chokeActor) == 1
+        VRTEMark(chokeActor, 0, 0, 0.0)
+    EndIf
     VTLog("SCENE OFF — mod fully unregistered for scene on " + a.GetDisplayName())
     RegisterForSingleUpdate(1.0)
 EndFunction
@@ -688,6 +1074,11 @@ Function ExitSceneOff()
     sceneEndGrace = 0
     SetTouchSinks(True)
     VRTouchEvents_Native.SetScenePaused(False)   ; resume the C++ hook
+    ; ★ 2026-09-12: ...and a scene that ends while that choke is STILL landed puts it back up -
+    ; exactly the condition the old Papyrus ChokeBlockFor evaluated on every render.
+    if chokeActive && chokeActor != None && chokeFired3 && !chokePassedOut && !chokeIsKillRun
+        VRTEMark(chokeActor, 1, 0, 0.0)
+    EndIf
     ScheduleNextUpdate()   ; resurrect any internal timer that was pending pre-scene
     VTLog("SCENE ON — mod re-armed (scene ended)")
 EndFunction
@@ -707,6 +1098,7 @@ EndFunction
 ; report-14 per-key baselines through here; V2 call sites omit it).
 Function MaybeArousal(Actor akActor, String bp, Bool isGrab, Int arm, String narration, Float baselineOverride = -1.0)
     if !arousalEnabled || akActor == None || akActor == playerRef
+        Debug.Trace("[V3] AROUSAL SKIP: gate off (arousalEnabled=" + arousalEnabled + ")")
         return
     EndIf
     ; No arousal LLM call during a SexLab/OStim scene — it was the missing gate:
@@ -714,11 +1106,18 @@ Function MaybeArousal(Actor akActor, String bp, Bool isGrab, Int arm, String nar
     ; so it fired an LLM prompt per intimate touch AND changed the NPC's face
     ; mid-scene.  (OnCBPC now bails earlier too; this also covers the grab path.)
     if ScenesSuppress(akActor)
+        Debug.Trace("[V3] AROUSAL SKIP: scene gate")
         return
     EndIf
     ; No arousal LLM call while this NPC is being choked — a strangled NPC
     ; isn't getting aroused, and no other event should fire during a choke.
     if chokeActive && akActor == chokeActor
+        Debug.Trace("[V3] AROUSAL SKIP: choke active")
+        return
+    EndIf
+    ; (fix list 41 V1) no LLM query, arousal change or face on a dead or knocked-out NPC.
+    if V3OutCold(akActor)
+        Debug.Trace("[V3] AROUSAL SKIP: dead or unconscious")
         return
     EndIf
     Float baseline = baselineOverride
@@ -726,6 +1125,7 @@ Function MaybeArousal(Actor akActor, String bp, Bool isGrab, Int arm, String nar
         baseline = VRTouch_TriggerLib.GetArousal(bp, isGrab, arm)
     EndIf
     if baseline <= 0.0
+        Debug.Trace("[V3] AROUSAL SKIP: baseline 0 for bp=" + bp)
         return
     EndIf
     Float now = Utility.GetCurrentRealTime()
@@ -734,20 +1134,40 @@ Function MaybeArousal(Actor akActor, String bp, Bool isGrab, Int arm, String nar
         if (now - arousalPendingTime) > 20.0
             arousalPendingActor = None
         Else
+            Debug.Trace("[V3] AROUSAL SKIP: a query is still in flight")
             return
         EndIf
     EndIf
     if IsOnArousalCd(akActor, now)
+        Debug.Trace("[V3] AROUSAL SKIP: 12s per-actor cooldown")
         return
     EndIf
     arousalPendingActor = akActor
     arousalPendingTime  = now
     RecordArousalCd(akActor, now)
 
-    String uuid = SkyrimNetApi.GetEntityUUID(akActor)
-    String ctx  = "{\"npcUUID\":\"" + uuid + "\",\"narration\":\"" + narration + "\",\"baseline\":" + (baseline as Int) + "}"
+    ; ⛔⛔ 2026-09-12 — THE NPC IS PASSED AS A FORMID NUMBER, NOT A UUID STRING.
+    ; Measured in VR the first time arousal actually fired: the prompt rendered with 8 missing
+    ; variables and printed "NPC: {{ npc.name }}" raw - decnpc() and render_character_profile()
+    ; do not resolve GetEntityUUID's quoted string, so the LLM judged the touch knowing neither
+    ; who she is nor how she feels about the player. SeverActions' working custom prompts pass
+    ; "npcFormId": <number> and call formid_to_uuid() in the template; this does the same.
+    ; FormIDDec (DLL) gives the UNSIGNED decimal - Papyrus's GetFormID() goes negative for load
+    ; slot 0x80+ (Sofia is 0xDC001827).
+    String fidDec = VRTouchEvents_Native.FormIDDec(akActor)
+    if fidDec == ""
+        fidDec = "0"
+    EndIf
+    ; ⛔ 2026-09-02 — narration MUST be JSON-escaped before it is concatenated in.
+    ; It carries free text from four sources that mods control: the NPC's name, a
+    ; weapon name, a held object's name and a device name. One '"' or '\' in any of
+    ; them produced malformed context JSON and the arousal call for that contact
+    ; silently misbehaved. V3JsonEscape had existed since the V3 cutover with ZERO
+    ; call sites — the escaper was written and then never wired. Its fast path is
+    ; two Finds and no allocation, so this costs nothing on the overwhelming case.
+    String ctx  = "{\"npcFormId\":" + fidDec + ",\"narration\":\"" + VRTouch_TriggerLib.V3JsonEscape(narration) + "\",\"baseline\":" + (baseline as Int) + "}"
     SkyrimNetApi.SendCustomPromptToLLM("vrtouch_arousal", "", ctx, Self as Quest, "VRTouch_MainScript", "OnArousalResponse")
-    VTLog("AROUSAL query bp=" + bp + " grab=" + isGrab + " base=" + baseline + " on " + akActor.GetDisplayName())
+    Debug.Trace("[V3] AROUSAL query bp=" + bp + " grab=" + isGrab + " base=" + baseline + " on " + akActor.GetDisplayName())
 EndFunction
 
 ; SendCustomPromptToLLM callback — apply the LLM's arousal decision + face.
@@ -918,7 +1338,10 @@ Bool Function IsOnArousalCd(Actor a, Float now)
     Int i = 0
     while i < 16
         if arousalCdActor[i] == a
-            return (now - arousalCdTime[i]) < ArousalCooldown
+            ; A NEGATIVE age is a stamp from an earlier game launch (realtime restarts at 0) -
+            ; expired, never "on cooldown". See the arousal bug note in Setup().
+            Float age = now - arousalCdTime[i]
+            return age >= 0.0 && age < ArousalCooldown
         EndIf
         i += 1
     EndWhile
@@ -1090,6 +1513,36 @@ EndFunction
 ;          OnObjectDropped(Spine2) → EndChoke(keep paralysis)
 ; ================================================================
 
+; ================================================================
+; ★ THE CHOKE PROMPT BLOCK - the state side (2026-09-12)
+; ================================================================
+; The user's design, modelled on the DD AddOn's gag system, which works:
+;   * from the moment the choke LANDS (3s), every LLM render for her carries a block
+;     saying her throat is held shut and every sound she makes is choked
+;     (0796_vrte_choke.prompt, reading the vrte_choke decorator)
+;   * after a 3-7s release, two renders of recovery; after 7-15s, three, more severe
+;     (0797_vrte_choke_recovery.prompt, reading vrte_choke_recovery)
+;
+; WHY THE RECOVERY IS NOT OPTIONAL. StartChoke deliberately avoids a "cannot speak" event
+; because one "lingered in her context and swallowed the RELEASE reaction too, leaving her
+; silent even after letting go". That is exactly the failure the gag's release block was
+; built to fix: withdrawing a constraint does not delete the choked turns it produced.
+;
+; ★★ 2026-09-12 — THE DECORATORS ARE NATIVE NOW. ChokeBlockFor / ChokeRecoveryFor (and the
+; VRTouch_Decorators.psc that registered them from Papyrus) are GONE. Measured in VR the same
+; day: SkyrimNet refreshes a Papyrus decorator in an async pre-pass 2-3 s AFTER the render that
+; needs it, so the block was right on only 2 of 5 replies and the recovery block never rendered.
+; VRTouchEvents.dll now registers vrte_choke / vrte_choke_recovery / vrte_ko_wake through
+; SkyrimNet's C++ API; the prompt engine calls them synchronously. This script PUSHES state at
+; the moment it changes, always BEFORE the DirectNarration that follows:
+;   block UP    3s landing (TickChoke)                 SetChokeBlock(a, playerName)
+;   block DOWN  passout (TickChoke), every EndChokeEx, SetChokeBlock(a, "")
+;               a scene starting (EnterSceneOff)
+;   block UP    a scene ending mid-choke (ExitSceneOff)
+;   recovery    3-7s / 7-15s release (EndChokeEx)      SetChokeRecovery(a, sev, 2 | 3)
+;   wake        a KO slot waking (WakeKOSlot)          SetKOWake(a, 2)
+; The render counting (5 s floor, the AddOn Recovery() clock) moved into the DLL unchanged.
+
 ; ----------------------------------------------------------------
 ; StartChoke — called when Spine2 is grabbed with recent neck contact
 ; ----------------------------------------------------------------
@@ -1119,6 +1572,9 @@ Function StartChoke(Actor akActor)
     chokeActor          = akActor
     chokeStartTime      = Utility.GetCurrentRealTime()
     chokeLastContact    = chokeStartTime
+    ; ★ tell the AddOn (2026-08-29): plug/effect narration lives there now and
+    ; must downgrade to the persistent tier while this NPC is being strangled.
+    SendModEvent("VRTE_ChokeState", (akActor.GetFormID() as String), 1.0)
     if chokeSoundHandle >= 0
         Sound.StopInstance(chokeSoundHandle)   ; defensive: clear any orphaned choke-sound handle
     EndIf
@@ -1127,7 +1583,7 @@ Function StartChoke(Actor akActor)
     chokeNextTick       = chokeStartTime + 1.0
     chokeFiredSustained = False
     chokeFiredWitnessed = False
-    chokeFiredThought7  = False
+    chokeFired3         = False
     chokeWarnedNoSound  = False
     chokeIsKillRun      = isKillRun
 
@@ -1156,10 +1612,10 @@ Function StartChoke(Actor akActor)
     ; Block NPC activation (prevents dialogue menu while being choked)
     akActor.BlockActivation(True)
 
-    ; Purge any pending LLM dialogue for this actor — a choked NPC
-    ; shouldn't be mid-sentence.  Interrupts currently playing TTS and
-    ; clears queued lines for all actors (SkyrimNet scope is global).
-    SkyrimNetApi.PurgeDialogue(False)
+    ; ★ V8 (fix list 41, 2026-09-13): the PurgeDialogue(False) that stood here MOVED to the 3 s landing (TickChoke,
+    ; `elapsed >= 3.0 && !chokeFired3`). It is GLOBAL and BLOCKING, and it ran on every arm, so a hand fumbling at the
+    ; throat (grab, release, grab) cut every actor's dialogue once a second. Before 3 s a hand on the throat is still
+    ; just a grab (the user's design, 2026-09-12), so nothing is cut until the choke lands.
 
     ; Silence vanilla Skyrim voice barks (combat shouts, greetings,
     ; hit reactions, idle lines) for the duration of the choke.
@@ -1173,12 +1629,12 @@ Function StartChoke(Actor akActor)
     akActor.SetVoiceRecoveryTime(15.0)
 
     ; --- SkyrimNet soft-gag (a strangled NPC can't talk) ----------------
-    ; Just cut off whatever line she's speaking RIGHT NOW.  (We do NOT register a
-    ; persistent "cannot speak" event — that lingered in her context and swallowed
-    ; the RELEASE reaction too, leaving her silent even after letting go.)  The
-    ; no-mid-choke-event change + the FireTrigger gag gate keep her quiet during
-    ; the choke; the release reaction is forced via DirectNarration in EndChokeEx.
-    SkyrimNetApi.TriggerInterruptDialogue(false)
+    ; (We do NOT register a persistent "cannot speak" event — that lingered in her
+    ; context and swallowed the RELEASE reaction too, leaving her silent even after
+    ; letting go.)  The no-mid-choke-event change + the FireTrigger gag gate keep her
+    ; quiet during the choke; the release reaction is forced via DirectNarration in EndChokeEx.
+    ; ★ V8: the TriggerInterruptDialogue(false) that cut her line HERE is now the 3 s landing's own (it was
+    ; already there) - the arm cuts nothing. See the note above.
 
     ; Cancel any V3 contact still waiting on its dwell delay for the choked
     ; actor (V3Dispatch's choke gag catches anything still in flight, but
@@ -1236,6 +1692,30 @@ EndFunction
 ; is choking them (direct contact) — including them would make
 ; stealth impossible by construction.
 ; ----------------------------------------------------------------
+; ----------------------------------------------------------------
+; CanWitness - is this actor a PERSON who can have seen something?
+;
+; ★ MANNEQUINS ARE NEVER WITNESSES (the user, 2026-09-10: "Mannequin must always be
+; excluded"). A HearthFires mannequin is a real Actor: it passes IsDead / IsDisabled /
+; IsChild and can have line of sight. In the 2026-09-10 key test this script handed one
+; the "fitted ... onto" onlooker line (SkyrimNet: "Could not determine name for actor
+; 0x30009AC" = BYOHHouse1InteriorRoom02Part125Mannequin2ndFloor). ManakinRace
+; (10760A:Skyrim.esm) catches every vanilla-race mannequin whatever a mod calls it; an
+; empty name catches the rest, and SkyrimNet cannot address a nameless actor anyway.
+; ----------------------------------------------------------------
+Bool Function CanWitness(Actor p)
+    if p == None
+        return False
+    EndIf
+    if !manakinRace
+        manakinRace = Game.GetFormFromFile(0x0010760A, "Skyrim.esm") as Race
+    EndIf
+    if manakinRace && p.GetRace() == manakinRace
+        return False
+    EndIf
+    return p.GetDisplayName() != ""
+EndFunction
+
 Bool Function IsAssaultWitnessed(Actor victim)
     if victim == None
         return False
@@ -1243,7 +1723,7 @@ Bool Function IsAssaultWitnessed(Actor victim)
     Int tries = 0
     while tries < 12
         Actor probe = Game.FindRandomActorFromRef(victim, 2000.0)
-        if probe != None && probe != victim && probe != playerRef && !probe.IsDead() && !probe.IsDisabled()
+        if probe != None && probe != victim && probe != playerRef && !probe.IsDead() && !probe.IsDisabled() && CanWitness(probe)
             if probe.HasLOS(playerRef) && playerRef.IsDetectedBy(probe)
                 return True
             EndIf
@@ -1259,22 +1739,8 @@ EndFunction
 ; Same fog-of-war sampling: a far-off witness in a sparse exterior may
 ; be missed, but in any populated area a real onlooker is found.
 ; ----------------------------------------------------------------
-Actor Function FindChokeWitness(Actor victim)
-    if victim == None
-        return None
-    EndIf
-    Int tries = 0
-    while tries < 12
-        Actor probe = Game.FindRandomActorFromRef(victim, 2000.0)
-        if probe != None && probe != victim && probe != playerRef && !probe.IsDead() && !probe.IsDisabled()
-            if probe.HasLOS(playerRef) && playerRef.IsDetectedBy(probe)
-                return probe
-            EndIf
-        EndIf
-        tries += 1
-    EndWhile
-    return None
-EndFunction
+; (FindChokeWitness is GONE, 2026-09-12: FindOnlookers replaces it for both the 7s beat and the
+;  passout - its random sample + HasLOS + IsDetectedBy found 0 onlookers in VR test 2.)
 
 Function EndChoke(Bool dispelParalysis)
     EndChokeEx(dispelParalysis, False)
@@ -1293,6 +1759,14 @@ Function EndChokeEx(Bool dispelParalysis, Bool silentCleanup)
     Actor a            = chokeActor
     Float chokeElapsed = Utility.GetCurrentRealTime() - chokeStartTime
     chokeEndTime       = Utility.GetCurrentRealTime()   ; arm the re-arm lockout (StartChoke)
+    ; ★ the choke bridge, off edge (see StartChoke).
+    SendModEvent("VRTE_ChokeState", "0", 0.0)
+    ; ★ 2026-09-12: the choke block comes down on EVERY end - release, passout hand-off,
+    ; kill, reload - and before the release narration below is sent. (A no-op if it never
+    ; went up, or already came down at passout; the DLL logs only real transitions.)
+    if a != None && VRTEStateRank(a) == 1
+        VRTEMark(a, 0, 0, 0.0)
+    EndIf
 
     ; --- KO-SLOT-RESIDENT short-circuit (kill-run OR post-passout) ---
     ; Both of these states mean the SAME thing: the victim is already a
@@ -1397,23 +1871,47 @@ Function EndChokeEx(Bool dispelParalysis, Bool silentCleanup)
         String releaseNarr    = ""
         String npcName2       = a.GetDisplayName()
         String playerName2    = playerRef.GetDisplayName()
+        String recSeverity    = ""
+        Int    recRenders     = 0
 
+        ; ★ 2026-09-12: the three release lines rewritten to the user's standing rules - ENFORCE,
+        ; DO NOT NEGATE (no "couldn't", no "can still ... but") and NO PRONOUNS (names, never
+        ; they/their) - and stripped of interpretation ("the warning was unmistakable" was a
+        ; judgement). Each is the physical after-state only; how she takes it is the LLM's.
+        ; The 3-7s and 7-15s releases also ARM the recovery block (0797): the choke block was up,
+        ; so its choked turns are sitting in her context and she has to be told her voice is back.
         if chokeElapsed < 3.0
             releaseTrigger = "VRTouch_Neck_Choke_Short"
             releaseNarr    = playerName2 + "'s hand closed briefly around " + npcName2 + \
-                "'s throat — a short squeeze, a flash of pressure, then release. " + npcName2 + \
-                " can still speak, but the warning was unmistakable"
+                "'s throat, a short squeeze and a flash of pressure, then let go."
         ElseIf chokeElapsed < 7.0
             releaseTrigger = "VRTouch_Neck_Choke_Sustained"
             releaseNarr    = playerName2 + " held " + npcName2 + \
                 "'s throat crushed shut for several seconds before letting go. " + npcName2 + \
-                " coughs hoarsely, voice rasping — they couldn't make a sound while that grip was on them, and their throat still throbs with bruising pressure"
+                "'s throat throbs with bruising pressure, and each breath rasps through it."
+            recSeverity = "moderate"
+            recRenders  = 2
         Else
-            ; 7.0 – 15.0s window (15s+ would have passed out and taken the Passout path)
+            ; 7.0 - 15.0s window (15s+ would have passed out and taken the Passout path)
             releaseTrigger = "VRTouch_Neck_Choke_Severe"
-            releaseNarr    = playerName2 + " finally released " + npcName2 + \
-                "'s throat just before they lost consciousness. " + npcName2 + \
-                " gasps raggedly, lungs burning, black spots still flickering at the edges of their vision — throat raw and scorched, each breath a harsh wheeze. They came within a hair's breadth of passing out"
+            releaseNarr    = playerName2 + " released " + npcName2 + \
+                "'s throat seconds before " + npcName2 + " would have passed out. " + npcName2 + \
+                "'s lungs burn, black spots flicker at the edge of " + npcName2 + \
+                "'s vision, and each breath is a harsh wheeze through a raw throat."
+            recSeverity = "severe"
+            recRenders  = 3
+        EndIf
+        if recRenders > 0
+            ; ★ 2026-09-12: pushed to the native decorator BEFORE the release narration below, so
+            ; the reply to that narration is the first render to carry the recovery block. (The
+            ; Papyrus-counted version never rendered at all in the VR test.)
+            ; rank 2 moderate / 3 severe, off after her 2 / 3 spoken replies, with a 180 s backstop.
+            Int recRank = 2
+            if recSeverity == "severe"
+                recRank = 3
+            EndIf
+            VRTEMark(a, recRank, recRenders, 180.0)
+            Debug.Trace("[V3] CHOKE RECOVERY armed: " + recSeverity + " x" + recRenders + " after " + chokeElapsed + "s on " + npcName2)
         EndIf
 
         ; ================================================================
@@ -1429,10 +1927,10 @@ Function EndChokeEx(Bool dispelParalysis, Bool silentCleanup)
         ; cooldown.  DirectNarration is a direct call, so no gate is even
         ; consulted — this comment exists so nobody "fixes" that later.
         ;
-        ; PurgeDialogue(False) is the blocking interrupt (StartChoke uses
-        ; the same call for the same reason).  It clears the queue AND cuts
+        ; PurgeDialogue(False) is the blocking interrupt.  It clears the queue AND cuts
         ; audio mid-playback, which is what makes this an interrupt tier.
-        SkyrimNetApi.PurgeDialogue(False)
+        ; ★ 2026-09-15 (the interrupt rule): only when SHE is the one talking - V3CutIfTalking.
+        V3CutIfTalking(a, "choke release")
         SkyrimNetApi.DirectNarration(releaseNarr, a, playerRef)
         ; Stamp BOTH clocks: she has just given a big reaction, so neither
         ; an ordinary touch nor another intimate one should pile straight on
@@ -1485,6 +1983,15 @@ Int Function FindKOSlot(Actor akActor)
     return -1
 EndFunction
 
+; ★ 2026-09-13 (fix list 41 V1/V7): True when she cannot answer anything - dead, in one of VRTE's KO slots, or unconscious
+; for any other reason. The same ladder KissSpeak and PushSend already used; now shared by every sender.
+Bool Function V3OutCold(Actor a)
+    if a == None
+        return True
+    EndIf
+    return a.IsDead() || FindKOSlot(a) >= 0 || a.IsUnconscious()
+EndFunction
+
 Function StartKOSlot(Actor a)
     if a == None || a.IsDead()
         return
@@ -1516,6 +2023,10 @@ Function StartKOSlot(Actor a)
     Utility.Wait(0.1)
     a.StopCombat()
 
+    ; ★ 2026-09-12 (the user's ruling "b"): her drink-potions ability goes BEFORE the HP drop below -
+    ; the drop is what makes the AI drink. Given back in WakeKOSlot.
+    koPotionMask[idx] = KOPotionsOff(a)
+
     ; --- Disarm R hand ---
     Weapon wR = a.GetEquippedWeapon(0)
     if wR != None
@@ -1542,20 +2053,34 @@ Function StartKOSlot(Actor a)
         EndIf
     EndIf
 
-    ; --- HP 50% + zero regen (makes heal detection reliable) ---
-    Float maxHp    = a.GetBaseActorValue("Health")
-    Float curHp    = a.GetActorValue("Health")
-    Float targetHp = maxHp * 0.5
-    if curHp > targetHp
-        a.DamageActorValue("Health", curHp - targetHp)
+    ; --- ★★ DOWN TO 25%, WAKE AT 50% (the user's ruling, 2026-09-12) + zero regen ---
+    ; "regain consciousness at 50% hp, and reduce it to 25% on choke passout - so if some regen
+    ; happens, we are still good to go." The wake is an ABSOLUTE threshold with a 25-point gap:
+    ; stray regen or a small drift cannot wake her, a real heal (potion, spell, feed) can.
+    ; It REPLACES both old wake tests - "health rose 5 above a snapshot" (woke Carmella at once
+    ; in the 09-12 VR test) and "any restore-health effect is on her" (a lingering food buff
+    ; would have done the same).
+    ; ⚠ Measured against her REAL maximum via GetActorValuePercentage. The old code took 50% of
+    ; GetBaseActorValue("Health") - the base value without her buffs - so its "50%" was never
+    ; really half of what she had. (GetActorValueMax is UNBOUND in Skyrim VR - logged 09-12.)
+    Float curHp = a.GetActorValue("Health")
+    Float pct0  = a.GetActorValuePercentage("Health")
+    if pct0 > 0.25
+        a.DamageActorValue("Health", curHp - (curHp * (0.25 / pct0)))
     EndIf
     koHealRate[idx] = a.GetActorValue("HealRate")
-    a.ForceActorValue("HealRate", 0.0)
-    ; Snapshot HP now.  With HealRate zeroed, the ONLY way Health rises is an
-    ; external heal — a potion (incl. the GiftByHand feed), an ingested effect,
-    ; or a heal spell.  TickKO wakes her when it does (catches potions, which
-    ; the heal-spell-keyword test misses).
-    koHpAtKO[idx] = a.GetActorValue("Health")
+    a.ForceActorValue("HealRate", 0.0)   ; kept: belt-and-braces under the 25-point gap
+    ; ★ SETTLING (2026-09-12): -2.0 = no wake test runs yet. TickKO waits until the knockout is
+    ; >= 4.5 s old, then pushes her back down to 25% if Health drifted up while the ragdoll and
+    ; SetUnconscious settled, and only then starts testing for 50%. (-1.0 is the old-save marker.)
+    koHpAtKO[idx] = -2.0
+    koAtReal[idx] = Utility.GetCurrentRealTime()
+    ; UNCONDITIONAL receipt (setpqv EnableDebug does not survive reloading an older save).
+    Debug.Trace("[V3] KO START " + a.GetDisplayName() + " slot=" + idx + " hp " + ((pct0 * 100.0) as Int) + "% -> " \
+        + ((a.GetActorValuePercentage("Health") * 100.0) as Int) + "% (" + curHp + " -> " + a.GetActorValue("Health") \
+        + ") healRate " + koHealRate[idx] + " -> 0 | restoreHealthEffect=" \
+        + (kwMagicRestoreHealth != None && a.HasMagicEffectWithKeyword(kwMagicRestoreHealth)) \
+        + " | down at 25%, wakes at 50%, tests start after a 4.5s settle")
 
     ; --- Silence vanilla barks ---
     a.SetVoiceRecoveryTime(999.0)
@@ -1567,10 +2092,13 @@ Function StartKOSlot(Actor a)
 
     ; Commit slot last so TickKO sees a fully-initialized entry.
     koActor[idx] = a
+    ; ★ V19: publish the KO state (rank 5) - the passout already took the choke block (rank 1) off.
+    KOMarkOn(a)
 
     ; Kick off tick if not already running
     if !koTicking
-        koTicking = True
+        koTicking  = True
+        koNextTick = Utility.GetCurrentRealTime() + 5.0
         RegisterForSingleUpdate(5.0)
     EndIf
 EndFunction
@@ -1589,49 +2117,968 @@ Function WakeKOSlot(Int idx)
         if koHealRate[idx] >= 0.0
             a.ForceActorValue("HealRate", koHealRate[idx])
         EndIf
+        ; ★ 2026-09-12 THE WAKE BLOCK (the user's design): for her next 2 renders, 0798 tells
+        ; the LLM she has just come to and is still gathering her senses. Without it nothing
+        ; ever told SkyrimNet she woke - measured: every reply after a wake was still
+        ; "*Carmella is unconscious.*", even while she was being choked again.
+        ; Her potion abilities come back first (the user's ruling "b": off only while knocked out).
+        KOPotionsOn(a, koPotionMask[idx])
+        ; rank 4: off after her 2 spoken replies OR 60 s, whichever first. The time limit is the fix for
+        ; VR test 2, where the wake block first showed 2 m 45 s after she woke, mid another choke.
+        ; (V19: rank 4 replaces the KO rank 5 here; when it comes off, the slot below is already empty.)
+        VRTEMark(a, 4, 2, 60.0)
+        Debug.Trace("[V3] KO WOKE " + a.GetDisplayName() + " slot=" + idx + " - wake block up (2 replies or 60 s)")
+    ElseIf a != None
+        KOMarkOff(a)
     EndIf
     koActor[idx]    = None
     koHealRate[idx] = -1.0
     koWakeHour[idx] = 0.0
     koHpAtKO[idx]   = -1.0
+    koAtReal[idx]   = 0.0
+EndFunction
+
+; Slot still in use — defensively re-assert paralysis if something external
+; cleared it (another mod dispelling, engine cell-reset edge cases). Only
+; meaningful when loaded. ★ 2026-09-12: now logged - an external clear is
+; exactly the kind of fact a "she stood up" report needs.
+Function KOHoldDown(Actor a)
+    if a.Is3DLoaded() && a.GetActorValue("Paralysis") < 0.5
+        Debug.Trace("[V3] KO paralysis was CLEARED externally on " + a.GetDisplayName() + " - re-asserted")
+        a.ForceActorValue("Paralysis", 1)
+        a.SetUnconscious(True)
+    EndIf
+EndFunction
+
+; ================================================================
+; ★ SMART NPC POTIONS OFF WHILE KNOCKED OUT (the user's ruling, 2026-09-12: "b")
+; ================================================================
+; Takes away whichever of the mod's three drink-potions abilities she holds and returns the mask
+; (1 base, 2 Mage, 4 Assassin) so WakeKOSlot can give back exactly those. Also used to re-check:
+; the mod's quest re-applies the ability periodically. Harmless (returns 0) without the mod.
+Int Function KOPotionsOff(Actor a)
+    Int mask = 0
+    String gone = ""
+    if spNpcPotion && a.HasSpell(spNpcPotion)
+        a.RemoveSpell(spNpcPotion)
+        mask += 1
+        gone += " NPCpotions_Spell"
+    EndIf
+    if spNpcPotionMage && a.HasSpell(spNpcPotionMage)
+        a.RemoveSpell(spNpcPotionMage)
+        mask += 2
+        gone += " NPCpotions_SpellMage"
+    EndIf
+    if spNpcPotionAssassin && a.HasSpell(spNpcPotionAssassin)
+        a.RemoveSpell(spNpcPotionAssassin)
+        mask += 4
+        gone += " NPCpotions_SpellAssassin"
+    EndIf
+    if mask > 0
+        Debug.Trace("[V3] KO potions OFF on " + a.GetDisplayName() + ":" + gone)
+    EndIf
+    return mask
+EndFunction
+
+; Smart NPC Potions' quest re-applies its ability on a timer: a knocked-out NPC is checked every
+; TickKO, and anything re-added is taken off again and remembered for the wake.
+Function KOPotionsRecheck(Int idx, Actor a)
+    Int again = KOPotionsOff(a)
+    if again > 0
+        Debug.Trace("[V3] KO potion ability was RE-ADDED to " + a.GetDisplayName() + " (Smart NPC Potions quest) - taken off again")
+        koPotionMask[idx] = KOMaskOr(koPotionMask[idx], again)
+    EndIf
+EndFunction
+
+; Bitwise OR of two masks made of the bits 1 / 2 / 4 (no SKSE Math dependency).
+Int Function KOMaskOr(Int m, Int add)
+    Int r = 0
+    Int bit = 1
+    while bit <= 4
+        if ((m / bit) % 2) == 1 || ((add / bit) % 2) == 1
+            r += bit
+        EndIf
+        bit *= 2
+    EndWhile
+    return r
+EndFunction
+
+Function KOPotionsOn(Actor a, Int mask)
+    if a == None || mask <= 0
+        return
+    EndIf
+    String back = ""
+    Bool ok = False
+    if spNpcPotion && ((mask / 1) % 2) == 1 && !a.HasSpell(spNpcPotion)
+        ok = a.AddSpell(spNpcPotion, False)
+        back += " NPCpotions_Spell"
+    EndIf
+    if spNpcPotionMage && ((mask / 2) % 2) == 1 && !a.HasSpell(spNpcPotionMage)
+        ok = a.AddSpell(spNpcPotionMage, False)
+        back += " NPCpotions_SpellMage"
+    EndIf
+    if spNpcPotionAssassin && ((mask / 4) % 2) == 1 && !a.HasSpell(spNpcPotionAssassin)
+        ok = a.AddSpell(spNpcPotionAssassin, False)
+        back += " NPCpotions_SpellAssassin"
+    EndIf
+    Debug.Trace("[V3] KO potions back ON for " + a.GetDisplayName() + ":" + back)
+EndFunction
+
+; ================================================================
+; ★★ THE MARKER FACTION (2026-09-12, third design — the user approved it after the C++ decorators
+; were measured failing: SkyrimNet reuses a decorator's answer per NPC for ~30 s).
+; ================================================================
+; VRTE_ChokeStateFaction (VRTouchEvents.esp 0x804). The prompts read it with SkyrimNet's BUILT-IN
+; get_faction_rank, which reads the actor at render time - why the DD gag block (worn_has_keyword)
+; has always been on time.
+;   rank 1 = being choked (0796) · 2 = recovery moderate · 3 = recovery severe (0797) · 4 = just woke (0798)
+;   rank <= 0 = off (removed from the faction)
+; replies > 0: VRTouchEvents.dll counts her SPOKEN replies (SkyrimNet "dialogue" event) and sends
+;              VRTE_RepliesDone when they are spent -> OnVRTERepliesDone takes the rank off.
+; seconds > 0: a REALTIME backstop - off at that time even if she never speaks (VRTEMarkTick).
+; ⛔ Call BEFORE the DirectNarration that follows a change: SkyrimNet renders her reply ~60 ms later.
+Int Function VRTEStateRank(Actor a)
+    if a == None || !vrteStateFaction
+        return -1
+    EndIf
+    return a.GetFactionRank(vrteStateFaction)
+EndFunction
+
+Function VRTEMark(Actor a, Int rank, Int replies, Float seconds)
+    if a == None || !vrteStateFaction
+        return
+    EndIf
+    if vmActor.Length != 8
+        vmActor = new Actor[8]
+        vmRank  = new Int[8]
+        vmUntil = new Float[8]
+    EndIf
+    Int slot = -1
+    Int free = -1
+    Int i = 0
+    while i < 8
+        if vmActor[i] == a
+            slot = i
+        ElseIf vmActor[i] == None && free < 0
+            free = i
+        EndIf
+        i += 1
+    EndWhile
+
+    if rank <= 0
+        ; ★ The prompt reads the state FILE (fourth design) - publish first, it is what SkyrimNet sees.
+        VRTouchEvents_Native.SetPromptState(a, a.GetDisplayName(), 0)
+        if a.GetFactionRank(vrteStateFaction) >= 0
+            if FindKOSlot(a) >= 0 && !a.IsDead()
+                ; ★ V19: still knocked out - the KO rank goes back on under the state that just ended.
+                a.SetFactionRank(vrteStateFaction, 5)
+                Debug.Trace("[V3] MARK off: " + a.GetDisplayName() + " - still in a KO slot, back to rank 5")
+            else
+                a.RemoveFromFaction(vrteStateFaction)
+                Debug.Trace("[V3] MARK off: " + a.GetDisplayName())
+            EndIf
+        EndIf
+        if slot >= 0
+            vmActor[slot] = None
+            vmRank[slot]  = 0
+            vmUntil[slot] = 0.0
+        EndIf
+        VRTouchEvents_Native.CountReplies(a, 0)
+        return
+    EndIf
+
+    if slot < 0
+        slot = free
+    EndIf
+    if slot < 0
+        ; Eight NPCs marked at once: the entry whose time limit ends SOONEST gives way.
+        ; ★ V18 (fix list 41, 2026-09-13): this was slot 0 by index, whatever it held. vmUntil 0.0 = no limit, which
+        ; only the live choke (rank 1) has - it is never chosen while any after-state is there to give way.
+        slot = 0
+        Int e = 0
+        Bool found = False
+        while e < 8
+            if vmUntil[e] > 0.0 && (!found || vmUntil[e] < vmUntil[slot])
+                slot = e
+                found = True
+            EndIf
+            e += 1
+        EndWhile
+        if vmActor[slot] != None && vmActor[slot] != a
+            Debug.Trace("[V3] MARK slots full: " + vmActor[slot].GetDisplayName() + " (rank " + vmRank[slot] + ") gives way to " + a.GetDisplayName())
+            VRTouchEvents_Native.SetPromptState(vmActor[slot], vmActor[slot].GetDisplayName(), 0)
+            vmActor[slot].RemoveFromFaction(vrteStateFaction)
+            VRTouchEvents_Native.CountReplies(vmActor[slot], 0)
+        EndIf
+    EndIf
+    ; ★★ FOURTH DESIGN (2026-09-12, the user's placeholder idea): the state SkyrimNet's prompts read is
+    ; the FILE Data/SKSE/Plugins/VRTouchEvents/prompt_state.json, written by the DLL right now. The
+    ; faction rank is kept only as VRTE's own Papyrus-side record (EndChokeEx / OnVRTERepliesDone /
+    ; the scene toggles test it); SkyrimNet's view of it lags ~20 s (VR test 4), so no prompt uses it.
+    VRTouchEvents_Native.SetPromptState(a, a.GetDisplayName(), rank)
+    if a.GetFactionRank(vrteStateFaction) < 0
+        a.AddToFaction(vrteStateFaction)
+    EndIf
+    a.SetFactionRank(vrteStateFaction, rank)
+    vmActor[slot] = a
+    vmRank[slot]  = rank
+    vmUntil[slot] = 0.0
+    if seconds > 0.0
+        vmUntil[slot] = Utility.GetCurrentRealTime() + seconds
+    EndIf
+    VRTouchEvents_Native.CountReplies(a, replies)
+    String what = "being choked"
+    if rank == 2
+        what = "recovery moderate"
+    ElseIf rank == 3
+        what = "recovery severe"
+    ElseIf rank == 4
+        what = "just woke"
+    EndIf
+    Debug.Trace("[V3] MARK " + a.GetDisplayName() + " rank " + rank + " (" + what + ") replies=" + replies + " limit=" + seconds \
+        + "s -> faction rank reads " + a.GetFactionRank(vrteStateFaction))
+    if seconds > 0.0
+        ScheduleNextUpdate()
+    EndIf
+EndFunction
+
+; ★★ V19 (fix list 41, 2026-09-13) — THE KO STATE, PUBLISHED FOR OTHER MODS.
+; rank 5 on VRTE_ChokeStateFaction (VRTouchEvents.esp 0x804) = she is in a VRTouchEvents KO slot: Paralysis 1,
+; SetUnconscious, Health held at 25 %, HealRate 0, until she wakes at 50 % or at the 2-4 game-hour deadline.
+; DD SN's Database reads it to hold its own effects (vibration, shock) off an NPC that cannot react to them.
+;   * set in StartKOSlot · removed when the slot is released on death · replaced by rank 4 in WakeKOSlot
+;   * a rank 1-4 set on her while knocked out (a kill-run choke) wins while it lasts; VRTEMark rank 0 puts 5 back
+;   * NOT in the vm ring, and NOT in the prompt-state file (no prompt reads rank 5) - the faction is the whole contract
+;   * the faction persists in the save and so does the KO slot; Setup re-asserts rank 5 for every live slot on load
+Function KOMarkOn(Actor a)
+    if a == None || !vrteStateFaction || a.IsDead()
+        return
+    EndIf
+    if a.GetFactionRank(vrteStateFaction) < 0
+        a.AddToFaction(vrteStateFaction)
+    EndIf
+    a.SetFactionRank(vrteStateFaction, 5)
+    Debug.Trace("[V3] MARK " + a.GetDisplayName() + " rank 5 (knocked out) -> faction rank reads " + a.GetFactionRank(vrteStateFaction))
+EndFunction
+
+Function KOMarkOff(Actor a)
+    if a == None || !vrteStateFaction
+        return
+    EndIf
+    if a.GetFactionRank(vrteStateFaction) == 5
+        a.RemoveFromFaction(vrteStateFaction)
+        Debug.Trace("[V3] MARK off (KO slot released): " + a.GetDisplayName())
+    EndIf
+EndFunction
+
+; VRTouchEvents.dll: this NPC has spoken the owed replies. Only an after-state (2/3/4) is counted.
+Function OnVRTERepliesDone(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    Int r = VRTEStateRank(a)
+    if a != None && r >= 2 && r <= 4   ; rank 5 (knocked out, V19) owes no replies
+        Debug.Trace("[V3] MARK replies spent: " + a.GetDisplayName() + " (rank " + r + ")")
+        VRTEMark(a, 0, 0, 0.0)
+    EndIf
+EndFunction
+
+; Takes off every marker whose time limit has passed; returns the seconds to the next limit (999999 = none).
+Float Function VRTEMarkTick(Float now)
+    Float nextW = 999999.0
+    if vmActor.Length != 8
+        return nextW
+    EndIf
+    Int i = 0
+    while i < 8
+        Actor a = vmActor[i]
+        if a != None && vmUntil[i] > 0.0
+            if now >= vmUntil[i]
+                Debug.Trace("[V3] MARK time limit reached: " + a.GetDisplayName() + " (rank " + vmRank[i] + ")")
+                VRTEMark(a, 0, 0, 0.0)
+            Else
+                if (vmUntil[i] - now) < nextW
+                    nextW = vmUntil[i] - now
+                EndIf
+                ; ★ 2026-09-12 DIAGNOSTIC: in VR test 4 a 180 s limit never fired (Carmella kept rank 3 for
+                ; 20 min). This proves the update loop is still reaching the check - at most one line / 30 s.
+                if now >= vmTraceAt
+                    vmTraceAt = now + 30.0
+                    Debug.Trace("[V3] MARK tick: " + a.GetDisplayName() + " rank " + vmRank[i] + " ends in " + ((vmUntil[i] - now) as Int) + "s")
+                EndIf
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+    return nextW
+EndFunction
+
+; ================================================================
+; ★★ THE KISS (PPB build 20103 — wired 2026-09-12, the user: "the kiss contact is now live from PPB,
+; wire it into VRTE"). Consumer guide: Report/Precision Physic Bodies Module/
+; VRTE_API_Change_Request_HeadSource.md § "2026-09-12 UPDATE - how to read the KISS from the API".
+; ================================================================
+; PPB SENSES the kiss (one edge event); VRTE only VOICES it. Nothing here re-derives a kiss from
+; geometry or from the HEAD:mouth digest contacts - PPB says outright those are "where on her face it
+; is touching", not the kiss, and they flicker lips/nose through a single kiss.
+;
+; POLICY — the kiss takes the LIPS row of the policy table (Part 07), because a kiss is the player's
+; mouth on her `lips` capsule: 0.5 s dwell · baseline arousal 6 · Speak (Interrupt) · private.
+;   * The dwell is real: KissTick speaks only if the kiss is still up 0.5 s after it started, so a
+;     lip bump while leaning in says nothing.
+;   * The cooldown is NOT consulted (a kiss is one deliberate, edge-triggered act - PPB sends one ON
+;     per kiss, so it cannot spam) but BOTH clocks are stamped, so hands touching her during the kiss
+;     do not pile narration on top of it.
+;   * While the kiss is up, and for 3 s after it ends, VRTE narrates NO HEAD-source touch on her
+;     (V3Dispatch) - otherwise "face" and "lips" lines land on top of the kiss.
+;   * The end is RECORDED, not spoken: a persistent event with the duration, only if the kiss was
+;     narrated and lasted >= 1 s.
+; Statement of fact only (the doctrine): which part touched which, and for how long. No pronouns.
+Function OnPPBMouthLips(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    String[] parts = StringUtil.Split(strArg, "|")
+    ; A fingertip at her lips arrives as "L|LIPS" / "R|LIPS" (two fields) - that is not a kiss.
+    if a == None || parts.Length < 3 || parts[2] != "HEAD"
+        return
+    EndIf
+    Float now = Utility.GetCurrentRealTime()
+    if numArg >= 0.5
+        kissActor   = a
+        kissStartAt = now
+        kissSaid    = False
+        Debug.Trace("[V3] KISS START on " + a.GetDisplayName() + " (PPB_MouthLips " + strArg + ") - narrated if still held at 0.5s")
+        ScheduleNextUpdate()
+        return
+    EndIf
+    ; numArg 0 = the kiss ended. PPB may send the OFF for an NPC it stopped tracking; match the sender.
+    if a != kissActor
+        Debug.Trace("[V3] KISS END for " + a.GetDisplayName() + " with no kiss open on her - ignored")
+        return
+    EndIf
+    Float held = now - kissStartAt
+    Debug.Trace("[V3] KISS END on " + a.GetDisplayName() + " after " + held + "s (narrated=" + kissSaid + ")")
+    if kissSaid && held >= 1.0 && !modOff && !a.IsDead()
+        ; (Fixed 2026-09-12: a 1.76 s kiss read "lasted 1 seconds".)
+        String lasted = (held as Int) + " seconds"
+        if held < 2.0
+            lasted = "about a second"
+        EndIf
+        SkyrimNetApi.RegisterPersistentEvent(playerRef.GetDisplayName() + "'s mouth left " + a.GetDisplayName() \
+            + "'s lips after a kiss that lasted " + lasted + ".", a, playerRef)
+    EndIf
+    kissLastActor = a
+    kissMuteUntil = now + 3.0
+    if kissRingActor == a
+        kissRingUntil = now + 5.0
+    EndIf
+    kissActor     = None
+    kissSaid      = False
+    kissStartAt   = 0.0
+EndFunction
+
+; Seconds until an open kiss reaches its 0.5 s dwell (999999 = nothing due). No side effects -
+; ScheduleNextUpdate calls it.
+Float Function KissWait(Float now)
+    if kissActor == None || kissSaid
+        return 999999.0
+    EndIf
+    Float w = (kissStartAt + 0.5) - now
+    if w < 0.05
+        w = 0.05
+    EndIf
+    return w
+EndFunction
+
+; OnUpdate: speak the kiss once its dwell has passed with the kiss still up.
+Function KissTick(Float now)
+    if kissActor == None || kissSaid || now < (kissStartAt + 0.5)
+        return
+    EndIf
+    kissSaid = True
+    KissSpeak(kissActor, now - kissStartAt)
+EndFunction
+
+Function KissSpeak(Actor a, Float held)
+    String why = ""
+    if a.IsDead()
+        why = "she is dead"
+    ElseIf modOff || V3InScene(a)
+        why = "a scene is running"
+    ElseIf chokeActive && chokeActor == a
+        why = "she is being choked"
+    ElseIf FindKOSlot(a) >= 0 || a.IsUnconscious()
+        why = "she is out cold"
+    ElseIf a == kissRingActor && Utility.GetCurrentRealTime() < kissRingUntil
+        why = "a kiss on " + a.GetDisplayName() + " ended under 5 s ago (kiss ring)"
+    EndIf
+    if why != ""
+        Debug.Trace("[V3] KISS on " + a.GetDisplayName() + " NOT narrated - " + why)
+        return
+    EndIf
+    kissRingActor = a
+    kissRingUntil = 0.0
+    String narr = playerRef.GetDisplayName() + "'s mouth is pressed to " + a.GetDisplayName() + "'s lips in a kiss."
+    Int arm = V3ArmorState(a, "lips")
+    ; The LIPS row: Speak (Interrupt), private. The cut is GLOBAL, so it runs only when SHE is talking (V3CutIfTalking).
+    V3CutIfTalking(a, "kiss")
+    SkyrimNetApi.DirectNarration(narr, a, playerRef)
+    V3RecordFire(a, True)
+    Debug.Trace("[V3] KISS SPOKEN on " + a.GetDisplayName() + " at " + held + "s (interrupt, private, arm=" + arm + ") | " + narr)
+    MaybeArousal(a, VRTouch_TriggerLib.V3ArousalKey("lips"), False, arm, narr, VRTouch_TriggerLib.V3GetArousal("lips", False, arm))
+EndFunction
+
+; True while HEAD-source touch narration on this NPC must stay quiet: during her kiss and 3 s after.
+Bool Function KissMutes(Actor npc)
+    if npc == None
+        return False
+    EndIf
+    if npc == kissActor
+        return True
+    EndIf
+    return npc == kissLastActor && Utility.GetCurrentRealTime() < kissMuteUntil
+EndFunction
+
+; ================================================================
+; ★★ THE PUSH REACTIONS (PPB build 20104 — wired 2026-09-12, reworked 2026-09-13). Contract:
+; Report/Precision Physic Bodies Module/VRTE_API_Notice_2026-09-12_Build20104_PushReaction.md
+; ================================================================
+; PPB SENSES the reaction and sends it only once the game accepted it (the walk started, the stagger
+; played, the knockdown landed); VRTE only VOICES it. The pusher is always the player.
+;   push    - a push walk engaged: she steps back from the player's push      = the user's "gentle push"
+;   shove   - the push made her stumble (stagger)
+;   dropped - a shove knocked her down (ragdoll)                               = "hard stumble"
+;   sweeped - both legs swept, she went down (ragdoll)                         = "leg sweep"
+; THE USER'S RULINGS:
+;   * push + shove = a PERSISTENT EVENT and a THOUGHT; dropped + sweeped = an INTERRUPT with a DIRECT
+;     NARRATION ("falling on your ass is a pretty significant event that need to make a NPC stop talking").
+;   * "wait 3sec before exposing a push, in case it turn into a shove, that way it's not 2 event sent for one
+;     interaction" - a push is HELD 3 s; a shove, a knockdown or a sweep on her inside that window REPLACES it.
+;   * "once we sent an event to skyrimnet about a push, wait 5 sec for the next one" - shared by push and
+;     shove. dropped / sweeped are never held and never throttled.
+;   * HOW: "there can't be a push without a contact, we just need to look at that. only core contact can do
+;     push/shove/stumble, and leg sweep is always at the leg" + "we prevent the contact event and add it to
+;     the push/shove event". VRTouchEvents.dll's TakePushContact hands over the player's contact on her core
+;     (or legs) and TAKES it - the bridge stops naming that contact while it lives. A touch line that already
+;     went out before PPB's push event arrived cannot be recalled; the push line still says how.
+;   * Fact only, no pronouns (V3PushLine). The direct narration is PRIVATE (she answers the player).
+; ⚠ The THOUGHT half is SkyrimNet's to throttle (one per NPC per 60 s); the persistent event always lands.
+Function OnPPBPushReaction(String eventName, String strArg, Float numArg, Form sender)
+    ; FOMOD "Push reactions: off" - PPB still detects and still physically pushes her;
+    ; VRTouchEvents simply says nothing, and the pushing hand's contact is left alone
+    ; (not TAKEN), so it narrates normally as an ordinary touch.
+    if !VRTouch_PushGate.IsEnabled()
+        return
+    EndIf
+    ; The ARRIVAL time, read before any native call: it decides whether a shove came inside a push's 3 s grace.
+    Float arrived = Utility.GetCurrentRealTime()
+    Actor a = sender as Actor
+    if a == None || a == playerRef || a.IsChild()
+        return
+    EndIf
+    ; PPB build 20105: "<kind>|<npc name>|<wand R|L>|<slot>|<child>|<leftTwin>", every field '|'-free (older builds:
+    ; "<kind>|<name>" - field 2 is then empty and the bridge ranks the candidates as before).
+    ; PPB build 20106 (P2): field 7 <afterShove> = 1 on a dropped / sweeped that followed this NPC's own shove inside PPB's
+    ; 1.5 s reaction cooldown (measured 0.17 s apart). Inside the 0.5 s shove hold (V9) the knockdown replaces the held
+    ; shove whatever the flag says; the flag is logged so a fall that came AFTER the hold ran out can be read for what it was.
+    String[] pf = V3Split12(strArg)
+    String kind = pf[0]
+    if pf[6] == "1"
+        Debug.Trace("[V3] PUSH " + kind + " on " + a.GetDisplayName() + " came after a shove on her (PPB afterShove=1)")
+    EndIf
+    if kind != "push" && kind != "shove" && kind != "dropped" && kind != "sweeped"
+        Debug.Trace("[V3] PUSH unknown kind '" + kind + "' on " + a.GetDisplayName() + " (" + strArg + ") - ignored")
+        return
+    EndIf
+    ; The contact that did it - taken NOW, so the bridge stops narrating it from this moment. ★ PPB names the pushing
+    ; hand now (the user, 2026-09-13: "sure, sound better"): that hand's contact wins when it qualifies.
+    String how = VRTouchEvents_Native.TakePushContact(a, kind, pf[2])
+    ; ⚠ The native yielded the script for a frame: the push hold's own OnUpdate may have run meanwhile.
+    Float now = Utility.GetCurrentRealTime()
+
+    if kind == "push"
+        ; ★ The 3 s is a GRACE PERIOD, not a duration (user, 2026-09-13): a push that lasted 1 s is still sent - 3 s
+        ; after it arrived, unless a shove or a fall on her replaced it first.
+        Int held = PushHoldFind(a, 0)
+        if held >= 0
+            ; A second walk inside the same grace is the same interaction (and a walk under a held shove adds nothing).
+            if pushHoldHow[held] == ""
+                pushHoldHow[held] = how
+            EndIf
+            return
+        EndIf
+        PushHoldPut(a, now, how, "push")
+        Debug.Trace("[V3] PUSH push on " + a.GetDisplayName() + " HELD 3s grace (sent unless a shove or a fall replaces it) | how=" + how)
+        ScheduleNextUpdate()
+        return
+    EndIf
+
+    ; shove / dropped / sweeped REPLACE a push held on her; dropped / sweeped also replace a held shove. Found and
+    ; marked with no call in between, so nothing can interleave. A hold already being SENT is replaced too when this
+    ; event ARRIVED inside its grace: PushSend checks the mark right before it talks to SkyrimNet (verify 2026-09-13:
+    ; reading the clock after the native had pushed such a shove past the deadline and dropped it).
+    Int hi = PushHoldFind(a, -2)
+    if hi >= 0 && arrived < pushHoldAt[hi] + PushHoldSecs(pushHoldKind[hi])
+        String heldKind = pushHoldKind[hi]
+        if kind == "shove" && heldKind == "shove"
+            ; A second stagger inside the same 0.5 s is the same interaction.
+            if pushHoldState[hi] == 0 && pushHoldHow[hi] == ""
+                pushHoldHow[hi] = how
+            EndIf
+            return
+        EndIf
+        String heldHow = pushHoldHow[hi]
+        if pushHoldState[hi] == 0
+            PushHoldClear(hi)
+        Else
+            pushHoldState[hi] = 2      ; SENDING -> REPLACED: that send aborts
+        EndIf
+        if how == "" && kind != "sweeped"
+            how = heldHow    ; the same hand made both
+        EndIf
+        Debug.Trace("[V3] PUSH held " + heldKind + " on " + a.GetDisplayName() + " REPLACED by " + kind)
+    EndIf
+    ; ★ V9 (fix list 41, 2026-09-13): a shove is HELD 0.5 s the way a push is held 3 s. PPB's rag escalation can
+    ; pre-empt its own reaction cooldown, so a hard push arrived as `shove` then `dropped` - two lines for one fall.
+    ; A knockdown or a sweep inside the 0.5 s replaces the shove; otherwise the shove goes out when it runs out.
+    if kind == "shove"
+        PushHoldPut(a, now, how, "shove")
+        Debug.Trace("[V3] PUSH shove on " + a.GetDisplayName() + " HELD 0.5s (sent unless a fall replaces it) | how=" + how)
+        ScheduleNextUpdate()
+        return
+    EndIf
+    PushSend(a, kind, how, now)
+EndFunction
+
+; ★ V9: how long a held reaction waits for something bigger to replace it.
+Float Function PushHoldSecs(String kind)
+    if kind == "shove"
+        return 0.5
+    EndIf
+    return 3.0
+EndFunction
+
+; Narrate one push reaction now (the gates are checked at send time). holdSlot >= 0 = a held push being sent from
+; that slot: it aborts if a shove or a fall replaced it while this send was yielding.
+Function PushSend(Actor a, String kind, String how, Float now, Int holdSlot = -1)
+    String nName = a.GetDisplayName()
+    Bool loud = (kind == "dropped" || kind == "sweeped")
+    String why = ""
+    if a.IsDead()
+        why = "she is dead"
+    ElseIf modOff || V3InScene(a)
+        why = "a scene is running"
+    ElseIf chokeActive && chokeActor == a
+        why = "she is being choked"
+    ElseIf FindKOSlot(a) >= 0 || a.IsUnconscious()
+        why = "she is out cold"
+    ElseIf !loud && PushRecent(a, now, holdSlot)
+        why = "a push or shove line went out on her under 5 s ago"
+    EndIf
+    if why != ""
+        Debug.Trace("[V3] PUSH " + kind + " on " + nName + " NOT narrated - " + why)
+        return
+    EndIf
+    Bool pushMale = False
+    ActorBase pushBase = a.GetLeveledActorBase()
+    if pushBase && pushBase.GetSex() == 0
+        pushMale = True
+    EndIf
+    String narr = VRTouch_TriggerLib.V3PushLine(kind, playerRef.GetDisplayName(), nName, how, pushMale)
+    ; The last check before SkyrimNet: a held push or shove whose slot was REPLACED while this send yielded does not go out.
+    if holdSlot >= 0 && (pushHoldActor[holdSlot] != a || pushHoldState[holdSlot] == 2)
+        Debug.Trace("[V3] PUSH " + kind + " on " + nName + " NOT narrated - replaced by a bigger reaction inside its grace")
+        return
+    EndIf
+    if V3LogOnly
+        if !loud
+            PushStamp(a, now)   ; shadow mode models live pacing, like V3Dispatch's
+        EndIf
+        Debug.Trace("[V3] PUSH " + kind + " WOULD FIRE (log-only) on " + nName + " | " + narr)
+        return
+    EndIf
+    if loud
+        ; The cut is GLOBAL, so it runs only when SHE is talking (V3CutIfTalking, 2026-09-15).
+        V3CutIfTalking(a, kind)
+        SkyrimNetApi.DirectNarration(narr, a, playerRef)
+        V3RecordFire(a, True)
+        Debug.Trace("[V3] PUSH " + kind + " on " + nName + " -> INTERRUPT + DIRECT NARRATION (private) | " + narr)
+    Else
+        ; Stamp FIRST, so a shove landing during the SkyrimNet calls below sees this line as sent.
+        PushStamp(a, now)
+        ; The event first, so the thought is generated with it already in her history.
+        SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
+        SkyrimNetApi.GenerateNPCThought(a, narr)
+        V3RecordFire(a, False)
+        Debug.Trace("[V3] PUSH " + kind + " on " + nName + " -> PERSISTENT EVENT + THOUGHT requested (SkyrimNet may throttle the thought) | " + narr)
+    EndIf
+EndFunction
+
+; OnUpdate: send every held push (3 s) or shove (0.5 s) whose grace ran out without turning into anything else.
+Function PushTick(Float now)
+    if pushHoldActor.Length < 4 || pushHoldState.Length < 4 \
+        || pushHoldKind.Length < 4
+        return
+    EndIf
+    Int i = 0
+    while i < 4
+        Actor a = pushHoldActor[i]
+        if a != None && pushHoldState[i] == 0 && now >= pushHoldAt[i] + PushHoldSecs(pushHoldKind[i])
+            ; Mark the slot SENDING instead of clearing it: PushSend yields on its actor and SkyrimNet calls, and a shove
+            ; that arrived inside the grace must still be able to find and replace this push (review 2026-09-13).
+            String how = pushHoldHow[i]
+            String heldKind = pushHoldKind[i]
+            pushHoldState[i] = 1
+            PushSend(a, heldKind, how, now, i)
+            if pushHoldActor[i] == a
+                PushHoldClear(i)
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+EndFunction
+
+; ★ 2026-09-13: True when that hand (lane "R" / "L") holds a piece of ARMOUR in HIGGS - any armour, a DD inventory
+; half with no biped slot included. The contact payload carries only the object's name, so HIGGS is asked.
+Bool Function V3HeldArmor(String w)
+    if w != "R" && w != "L"
+        return False
+    EndIf
+    ObjectReference held = HiggsVR.GetGrabbedObject(w == "L")
+    return held != None && (held.GetBaseObject() as Armor) != None
+EndFunction
+
+; Seconds until the next held push is due (999999 = none). No side effects - ScheduleNextUpdate calls it.
+Float Function PushWait(Float now)
+    Float w = 999999.0
+    if pushHoldActor.Length < 4 || pushHoldState.Length < 4 \
+        || pushHoldKind.Length < 4
+        return w
+    EndIf
+    Int i = 0
+    while i < 4
+        if pushHoldActor[i] != None && pushHoldState[i] == 0
+            Float left = (pushHoldAt[i] + PushHoldSecs(pushHoldKind[i])) - now
+            if left < 0.05
+                left = 0.05
+            EndIf
+            if left < w
+                w = left
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+    return w
+EndFunction
+
+; The hold slot for this NPC, or -1. state 0 = only a HELD push/shove (not one being sent) · -1 = any state ·
+; -2 = any state but 2 (V9: a replaced slot waiting to be cleared must not hide a newer hold on the same NPC).
+Int Function PushHoldFind(Actor a, Int state0 = -1)
+    if pushHoldActor.Length < 4 || pushHoldState.Length < 4
+        return -1
+    EndIf
+    Int i = 0
+    while i < 4
+        if pushHoldActor[i] == a && (state0 == -1 || (state0 == -2 && pushHoldState[i] != 2) || pushHoldState[i] == state0)
+            return i
+        EndIf
+        i += 1
+    EndWhile
+    return -1
+EndFunction
+
+Function PushHoldPut(Actor a, Float now, String how, String kind)
+    if pushHoldActor.Length < 4 || pushHoldState.Length < 4 \
+        || pushHoldKind.Length < 4
+        pushHoldActor = new Actor[4]
+        pushHoldAt    = new Float[4]
+        pushHoldHow   = new String[4]
+        pushHoldState = new Int[4]
+        pushHoldKind  = new String[4]
+    EndIf
+    Int slot = pushHoldActor.Find(None)
+    if slot < 0
+        ; Four pushes held at once - send the oldest HELD one now rather than lose it. A slot being sent is never
+        ; chosen (it would be sent twice - verify 2026-09-13); if all four are being sent, this push is dropped.
+        slot = -1
+        Int i = 0
+        while i < 4
+            if pushHoldState[i] == 0 && (slot < 0 || pushHoldAt[i] < pushHoldAt[slot])
+                slot = i
+            EndIf
+            i += 1
+        EndWhile
+        if slot < 0
+            Debug.Trace("[V3] PUSH push on " + a.GetDisplayName() + " NOT held - four pushes are being sent right now")
+            return
+        EndIf
+        Actor old = pushHoldActor[slot]
+        String oldHow = pushHoldHow[slot]
+        String oldKind = pushHoldKind[slot]
+        if oldKind == ""
+            oldKind = "push"
+        EndIf
+        ; Take the slot for the new hold FIRST - PushSend yields, and nothing may claim this slot in between.
+        pushHoldActor[slot] = a
+        pushHoldAt[slot]    = now
+        pushHoldHow[slot]   = how
+        pushHoldState[slot] = 0
+        pushHoldKind[slot]  = kind
+        PushSend(old, oldKind, oldHow, now)
+        return
+    EndIf
+    pushHoldActor[slot] = a
+    pushHoldAt[slot]    = now
+    pushHoldHow[slot]   = how
+    pushHoldState[slot] = 0
+    pushHoldKind[slot]  = kind
+EndFunction
+
+Function PushHoldClear(Int i)
+    pushHoldActor[i] = None
+    pushHoldAt[i]    = 0.0
+    pushHoldHow[i]   = ""
+    pushHoldState[i] = 0
+    if pushHoldKind.Length > i
+        pushHoldKind[i] = ""
+    EndIf
+EndFunction
+
+; True when a push or shove LINE went out on this NPC less than 5 s ago, or one is being sent right now (except
+; the push being sent from holdSlot itself). Read-only.
+Bool Function PushRecent(Actor a, Float now, Int holdSlot = -1)
+    if pushHoldActor.Length >= 4 && pushHoldState.Length >= 4
+        Int h = 0
+        while h < 4
+            if h != holdSlot && pushHoldActor[h] == a && pushHoldState[h] == 1
+                return True
+            EndIf
+            h += 1
+        EndWhile
+    EndIf
+    if pushCdActor.Length < 4
+        return False
+    EndIf
+    Int i = pushCdActor.Find(a)
+    if i < 0 || pushCdAt[i] <= 0.0
+        return False
+    EndIf
+    ; A small NEGATIVE age is a stamp written a moment after this event's clock was read (the handlers yield on
+    ; natives) - still recent. Setup wipes the ring on load, so a large negative age cannot happen.
+    Float age = now - pushCdAt[i]
+    return age > -2.0 && age < 5.0
+EndFunction
+
+; Stamp a push/shove line for this NPC: her own slot, else an empty one, else the oldest.
+Function PushStamp(Actor a, Float now)
+    if pushCdActor.Length < 4
+        pushCdActor = new Actor[4]
+        pushCdAt    = new Float[4]
+    EndIf
+    Int slot = pushCdActor.Find(a)
+    if slot < 0
+        slot = pushCdActor.Find(None)
+    EndIf
+    if slot < 0
+        slot = 0
+        Int i = 1
+        while i < 4
+            if pushCdAt[i] < pushCdAt[slot]
+                slot = i
+            EndIf
+            i += 1
+        EndWhile
+    EndIf
+    pushCdActor[slot] = a
+    pushCdAt[slot]    = now
+EndFunction
+
+; ================================================================
+; ★★ MASTURBATION (2026-09-13) — moved INTO VRTE (the user: "just cut it away from the AddOn, it's a VRTE by
+; product and yours to work into ... masturbation event are more a general thing than DD specific").
+; ================================================================
+; PPB_PlayerMasturbation: PPB sends it on the RELEASE edge after the player's OWN hand (an NPC's hand is
+; excluded) brought him to full erection - one event at the end of the act. strArg "MAX", numArg = the level,
+; sender = the player.
+; Only the people who can SEE him hear of it, as a SHORT-LIVED event each (the user's 2026-08-29 witness rule:
+; the one it happens to gets a persistent event, a watcher a short-lived one). Onlookers = VRTE's range +
+; line-of-sight test (FindOnlookers), which found watchers in VR where the old HasLOS+IsDetectedBy sample did not.
+; ⚠ That test does not ask whether the watcher DETECTS the player (the removed DD version did, at 1050 u) - the
+;   same user-approved rule as the choke's onlookers. A sneaking player in plain line of sight still counts.
+; ★ 30 s cooldown (review 2026-09-13): PPB raises it on EVERY release edge once the level reached max, so a hand
+;   leaving the radius on each stroke would re-run the onlooker scan several times a second.
+; Fact only, no pronouns.
+Function OnPPBPlayerMasturbation(String eventName, String strArg, Float numArg, Form sender)
+    v3nMasturbation += 1
+    Float now = Utility.GetCurrentRealTime()
+    if mastLastAt > 0.0 && now - mastLastAt >= 0.0 && now - mastLastAt < 30.0
+        Debug.Trace("[V3] MASTURBATION not narrated - one went out " + ((now - mastLastAt) as Int) + "s ago (30 s)")
+        return
+    EndIf
+    if modOff || V3InScene(playerRef)
+        Debug.Trace("[V3] MASTURBATION not narrated - a scene is running")
+        return
+    EndIf
+    mastLastAt = now
+    String pName = playerRef.GetDisplayName()
+    String narr = pName + " masturbated to a full erection."
+    Actor[] seen = FindOnlookers(playerRef, 4)
+    Int n = 0
+    Int i = 0
+    while i < 4
+        Actor o = seen[i]
+        if o != None
+            if V3LogOnly
+                Debug.Trace("[V3] MASTURBATION WOULD tell " + o.GetDisplayName() + " (log-only) | " + narr)
+            Else
+                SkyrimNetApi.RegisterShortLivedEvent("vrte_saw_mast_" + VRTouchEvents_Native.FormIDDec(o), \
+                    "vrte_witnessed", narr, "", 600000, o, playerRef)
+            EndIf
+            n += 1
+        EndIf
+        i += 1
+    EndWhile
+    Debug.Trace("[V3] MASTURBATION (level " + (numArg as Int) + ") seen by " + n + " onlooker(s) | " + narr)
+EndFunction
+
+; ================================================================
+; ★ THE ONLOOKER TEST (2026-09-12, user-approved: "within range and in line of sight")
+; ================================================================
+; Replaces HasLOS + IsDetectedBy on a random sample, which found 0 onlookers in VR test 2 with
+; Carmella standing beside Sofia's choke. Every candidate within range is logged with its numbers,
+; so the next test says exactly who was looked at and why they did or did not count.
+Bool Function OnlookerSees(Actor victim, Actor p, Bool logIt)
+    if p == None || p == victim || p == playerRef || p.IsDead() || p.IsDisabled() || p.IsChild() || !CanWitness(p)
+        return False
+    EndIf
+    Float dist = p.GetDistance(victim)
+    if dist > 2000.0
+        return False
+    EndIf
+    if p.IsUnconscious() || FindKOSlot(p) >= 0
+        if logIt
+            Debug.Trace("[V3] ONLOOKER " + p.GetDisplayName() + " dist=" + (dist as Int) + " - out cold, not watching")
+        EndIf
+        return False
+    EndIf
+    Bool los = p.HasLOS(victim)
+    if logIt
+        String verdict = "not seen"
+        if los
+            verdict = "SEES IT"
+        EndIf
+        Debug.Trace("[V3] ONLOOKER " + p.GetDisplayName() + " dist=" + (dist as Int) + " los=" + los + " -> " + verdict)
+    EndIf
+    return los
+EndFunction
+
+; Up to maxCount (max 4) actors who can see the victim: every actor in her cell, then a sampled top-up
+; for an exterior neighbour cell. Unused tail entries are None.
+Actor[] Function FindOnlookers(Actor victim, Int maxCount)
+    Actor[] found = new Actor[4]
+    if victim == None
+        return found
+    EndIf
+    if maxCount > 4
+        maxCount = 4
+    EndIf
+    Int n = 0
+    Int scanned = 0
+    Cell c = victim.GetParentCell()
+    if c
+        ; ⛔ 43 = kNPC. SKSE's filter matches the reference's BASE OBJECT type, so the placed-
+        ; reference type 62 (kCharacter) matched NOTHING - VR test 3 logged "0 actors checked in
+        ; her cell" with Carmella herself in it. Diary of Mine, iActions and Laura's Bondage Shop
+        ; all scan with 43.
+        Int total = c.GetNumRefs(43)
+        Int i = 0
+        while i < total && n < maxCount
+            Actor p = c.GetNthRef(i, 43) as Actor
+            if p != None
+                scanned += 1
+                if OnlookerSees(victim, p, True)
+                    found[n] = p
+                    n += 1
+                EndIf
+            EndIf
+            i += 1
+        EndWhile
+    EndIf
+    Int tries = 0
+    while tries < 8 && n < maxCount
+        Actor q = Game.FindRandomActorFromRef(victim, 2000.0)
+        if q != None && q.GetParentCell() != c && found.Find(q) < 0
+            if OnlookerSees(victim, q, True)
+                found[n] = q
+                n += 1
+            EndIf
+        EndIf
+        tries += 1
+    EndWhile
+    Debug.Trace("[V3] ONLOOKERS for " + victim.GetDisplayName() + ": " + n + " see it (" + scanned + " actors checked in her cell)")
+    return found
 EndFunction
 
 ; Poll all KO slots for death, heal, or wake-timer expiry.
-; Called from OnUpdate every 5s while any slot is active.
+; Called from OnUpdate every 5s while any slot is active (koNextTick, 2026-09-12).
 Function TickKO()
     Float nowHour = Utility.GetCurrentGameTime() * 24.0
+    Float nowReal = Utility.GetCurrentRealTime()
     Bool  any     = False
     Int   i       = 0
     while i < 10
         Actor a = koActor[i]
         if a != None
+            ; ★ 2026-09-12: every branch that ends a slot says WHICH test fired, unconditionally.
+            ; The VR test that found the instant wake could not say why - WakeKOSlot was silent.
+            Float koSecs = -1.0
+            if koAtReal[i] > 0.0
+                koSecs = nowReal - koAtReal[i]
+            EndIf
             if a.IsDead()
                 ; Slot release — no wake anim, engine handles corpse.
                 ; HealRate restore irrelevant on corpse; skip.
+                Debug.Trace("[V3] KO slot " + i + " released: " + a.GetDisplayName() + " is dead")
+                KOMarkOff(a)
+                koPotionMask[i] = 0
                 koActor[i]    = None
                 koHealRate[i] = -1.0
                 koWakeHour[i] = 0.0
                 koHpAtKO[i]   = -1.0
+                koAtReal[i]   = 0.0
             ElseIf nowHour >= koWakeHour[i]
+                Debug.Trace("[V3] KO WAKE reason=deadline (game hour " + nowHour + " >= " + koWakeHour[i] + ") on " + a.GetDisplayName() + " after " + koSecs + "s")
                 WakeKOSlot(i)
-            ElseIf kwMagicRestoreHealth != None && a.Is3DLoaded() && a.HasMagicEffectWithKeyword(kwMagicRestoreHealth)
-                ; Heal SPELL (instant) — wake immediately.
-                WakeKOSlot(i)
-            ElseIf a.Is3DLoaded() && koHpAtKO[i] >= 0.0 && a.GetActorValue("Health") > koHpAtKO[i] + 5.0
-                ; Health rose with regen zeroed -> an external heal (POTION /
-                ; GiftByHand feed / ingested effect).  This is what the user's
-                ; potion case needs — WakeKOSlot clears BOTH SetUnconscious and
-                ; the Paralysis AV together, so she actually gets up.
+            ElseIf koHpAtKO[i] < -1.5
+                ; ★ SETTLING (2026-09-12): no wake test of any kind yet. Once the knockout is
+                ; 4.5 s old, make sure she really sits at 25% - pushing her back down if Health
+                ; drifted up while the ragdoll settled - and start testing for 50% from there.
+                if a.Is3DLoaded() && (koAtReal[i] <= 0.0 || koSecs >= 4.5)
+                    Float sPct = a.GetActorValuePercentage("Health")
+                    String sNote = "at " + ((sPct * 100.0) as Int) + "%"
+                    if sPct > 0.26
+                        Float sHp = a.GetActorValue("Health")
+                        a.DamageActorValue("Health", sHp - (sHp * (0.25 / sPct)))
+                        sNote = "drifted to " + ((sPct * 100.0) as Int) + "% while settling - pushed back to " \
+                            + ((a.GetActorValuePercentage("Health") * 100.0) as Int) + "%"
+                    EndIf
+                    koHpAtKO[i] = a.GetActorValue("Health")   ; settled - the value is kept for the receipts
+                    Debug.Trace("[V3] KO SETTLED " + a.GetDisplayName() + " after " + koSecs + "s: " + sNote \
+                        + " | restoreHealthEffect=" + (kwMagicRestoreHealth != None && a.HasMagicEffectWithKeyword(kwMagicRestoreHealth)) \
+                        + " | wakes at 50%")
+                EndIf
+                KOHoldDown(a)
+                KOPotionsRecheck(i, a)
+                any = True
+            ElseIf a.Is3DLoaded() && a.GetActorValuePercentage("Health") >= 0.50
+                ; ★ THE WAKE (the user's ruling): Health back to 50% of her real maximum. From the
+                ; 25% floor that takes a real heal - a potion (incl. the GiftByHand feed), a heal
+                ; spell, an ingested effect - and never stray regen. WakeKOSlot clears BOTH
+                ; SetUnconscious and the Paralysis AV together, so she actually gets up.
+                Debug.Trace("[V3] KO WAKE reason=hp50 on " + a.GetDisplayName() + " after " + koSecs + "s (hp " \
+                    + ((a.GetActorValuePercentage("Health") * 100.0) as Int) + "%, settled at " + koHpAtKO[i] \
+                    + ") | restoreHealthEffect=" + (kwMagicRestoreHealth != None && a.HasMagicEffectWithKeyword(kwMagicRestoreHealth)))
                 WakeKOSlot(i)
             Else
-                ; Slot still in use — also defensively re-assert paralysis
-                ; if it got cleared by something external (another mod
-                ; dispelling, engine cell-reset edge cases).  Only meaningful
-                ; when loaded.
-                if a.Is3DLoaded() && a.GetActorValue("Paralysis") < 0.5
-                    a.ForceActorValue("Paralysis", 1)
-                    a.SetUnconscious(True)
-                EndIf
+                KOHoldDown(a)
+                KOPotionsRecheck(i, a)
                 any = True
             EndIf
         EndIf
@@ -1785,6 +3232,31 @@ Function TickChoke()
         ; better, and nothing is lost below 7s — a short choke still gets its
         ; full release narration (Short / Sustained tiers in EndChokeEx).
 
+        ; ★ 3s: THE CHOKE LANDS (the user's design, 2026-09-12).
+        ; ⚠ This is NOT the deleted 3s fear-thought above, and it spends none of her thought
+        ; budget: it is an interrupt + a DirectNarration, and it raises the choke prompt block
+        ; (0796, via the native vrte_choke decorator), so every render for her from here carries it.
+        ; Before 3s a hand on the throat is still just a grab - a release in that window gets
+        ; the ordinary short release line and no block.
+        if elapsed >= 3.0 && !chokeFired3
+            chokeFired3 = True
+            if !modOff   ; OFF for a scene: consume the milestone; the block stays down too
+                String c3Npc    = a.GetDisplayName()
+                String c3Player = playerRef.GetDisplayName()
+                ; ⛔ ORDER MATTERS: the block goes up BEFORE the narration. SkyrimNet renders her
+                ; reply ~60 ms after DirectNarration, and the native decorator answers from the
+                ; state at that instant. (The Papyrus version missed exactly this reply.)
+                VRTEMark(a, 1, 0, 0.0)
+                ; ★ V8 (fix list 41): the purge the ARM used to run - a choked NPC must not be mid-sentence or have a
+                ; line queued. GLOBAL (every actor) and blocking, so it runs once per landed choke, not per grab.
+                ; ★ 2026-09-15 (the interrupt rule): and only when SHE is the one talking - V3CutIfTalking.
+                V3CutIfTalking(a, "choke landed")
+                SkyrimNetApi.DirectNarration(c3Player + "'s hand is clamped tight around " + c3Npc + "'s throat and holds it shut. Air stops at the grip, so every sound " + c3Npc + " makes comes out as a choked, strangled noise.", a, playerRef)
+                V3RecordFire(a, True)
+                Debug.Trace("[V3] CHOKE 3s LANDED on " + c3Npc + " - interrupt + narration, choke block up")
+            EndIf
+        EndIf
+
         ; --- 5s milestone: sustained panic response (no LLM fire) ---
         ; We deliberately do NOT FireTrigger here.  A choked NPC cannot
         ; speak — the pain grunts above are their only vocalization.
@@ -1824,39 +3296,46 @@ Function TickChoke()
           EndIf ; !modOff
         EndIf
 
-        ; --- 7s: escalated panic-thought (UNVOICED, victim still choked) ---
-        if elapsed >= 7.0 && !chokeFiredThought7
-            chokeFiredThought7 = True
-            if !modOff   ; OFF for a scene: consume the milestone, don't leak the thought
-                SkyrimNetApi.GenerateNPCThought(a, "It has been too long now and " + playerRef.GetDisplayName() + "'s grip has only crushed down harder. Your chest is heaving against nothing, your lungs are screaming, and the edges of everything are starting to go grey and far away. There's a roaring in your ears. Somewhere under the pain a single thought has gone cold and clear — you could actually die here, in this grip, and you still can't scream, can't beg, can't do anything but claw and shake as your own strength drains out of your arms.")
-            EndIf
-        EndIf
-
-        ; --- 7s: public witness reaction (bystanders, NEVER the victim) ---
-        ; The victim is gagged (can't speak), but nearby onlookers SHOULD react to
-        ; the violence.  SkyrimNet has no "audience minus actor" param, so we pick a
-        ; surrounding witness and make THEM the speaker (DirectNarration originator).
-        ; That fires the reaction to "everyone around minus the choked victim" — the
-        ; victim is structurally excluded (never the one reacting).  No witness in
-        ; range -> stays silent (a private choke draws no attention).  Fires once.
+        ; ★ 7s: THE ROOM NOTICES (the user's design, 2026-09-12).
+        ; REPLACES two things:
+        ;   * the 7s unvoiced panic-thought pushed to the VICTIM - her state is now carried by
+        ;     the choke block from 3s, and the thought spent her one thought per 60s for it;
+        ;   * the old single-witness DirectNarration, which made ONE random bystander speak.
+        ; Now everyone in view gets what the DD AddOn gives an onlooker: a SHORT-LIVED event
+        ; (awareness that fades; keyed per watcher and victim, so a second choke replaces the
+        ; first instead of stacking) and an unvoiced thought.
+        ; Same sampler and filters as the old device onlooker loop (OnDDZDeviceEquipped, removed 2026-09-13): up to 4
+        ; watchers, a mannequin never counts (CanWitness), and the victim is excluded by
+        ; construction - she is being strangled, she is not watching it.
         if elapsed >= 7.0 && !chokeFiredWitnessed
             chokeFiredWitnessed = True
-          if !modOff   ; OFF for a scene: consume the milestone, no witness narration
-            Actor witness = FindChokeWitness(a)
-            if witness != None
-                String witName   = a.GetDisplayName()
-                String witPlayer = playerRef.GetDisplayName()
-                String witNarr   = witPlayer + " has " + witName + " by the throat in a brutal chokehold — " + \
-                    witName + "'s face twists in pain and panic as they claw for air."
-                SkyrimNetApi.DirectNarration(witNarr, witness, None)
-                VTLog("CHOKE WITNESS reaction by " + witness.GetDisplayName() + " (victim " + witName + " excluded as speaker)")
-            EndIf
+          if !modOff   ; OFF for a scene: consume the milestone, nobody is told
+            String cwNpc    = a.GetDisplayName()
+            String cwPlayer = playerRef.GetDisplayName()
+            String cwLine   = cwPlayer + " has " + cwNpc + " by the throat, hand clamped shut around it, and " + cwNpc + " is clawing at the grip."
+            ; ★ 2026-09-12: FindOnlookers (range + line of sight, every candidate logged) replaces the
+            ; random sample + HasLOS + IsDetectedBy, which found 0 in VR with Carmella watching.
+            Actor[] cwSeen = FindOnlookers(a, 4)
+            Int cwFound = 0
+            Int cwi = 0
+            while cwi < 4
+                Actor cwProbe = cwSeen[cwi]
+                if cwProbe != None
+                    SkyrimNetApi.RegisterShortLivedEvent("vrte_choke_saw_" + cwProbe.GetFormID() + "_" + a.GetFormID(), \
+                        "vrte_choke_witnessed", cwLine, "", 600000, cwProbe, a)
+                    SkyrimNetApi.GenerateNPCThought(cwProbe, cwLine)
+                    cwFound += 1
+                EndIf
+                cwi += 1
+            EndWhile
+            Debug.Trace("[V3] CHOKE 7s seen by " + cwFound + " onlooker(s) on " + cwNpc + " | " + cwLine)
           EndIf ; !modOff
         EndIf
 
         ; --- 15s milestone: passout ---
         if elapsed >= 15.0
-            ; Stop sound (12s of audio started at 3s)
+            ; Stop sound (12 s of audio started at elapsed >= 2.0 s — see the
+            ; arming site; this comment said "at 3s" and was wrong)
             if chokeSoundHandle >= 0
                 Sound.StopInstance(chokeSoundHandle)
                 chokeSoundHandle = -1
@@ -1871,23 +3350,41 @@ Function TickChoke()
             ; Unblock activation — NPC is on the ground now
             a.BlockActivation(False)
 
-            ; The passout narration — the LAST event that was still routed
-            ; through the dead trigger path, now a direct call like the rest.
-            ;
-            ; originatorActor is deliberately None: she has just been choked
-            ; unconscious and cannot be the speaker, so SkyrimNet picks an
-            ; appropriate bystander. targetActor None = addressed to everyone
-            ; nearby, which is exactly what the old YAML's `audience:
-            ; everyone` meant. No witness in range simply means silence — a
-            ; private strangling draws no comment, which is correct.
-            ;
-            ; NOT a thought: the thought manager self-skips dead/unconscious/
-            ; sleeping actors, so a thought here would be dropped by
-            ; construction the moment StartKOSlot runs.
+            ; ★★ THE PASSOUT NARRATION — WHO SPEAKS (the user's ruling, 2026-09-12: "an onlooker
+            ; reacts if one can see it").
+            ; It used to be DirectNarration(line, None, None) on the theory that SkyrimNet would
+            ; pick a bystander. Measured in VR: it picked THE VICTIM - an unconscious NPC was
+            ; forced to reply ("*Carmella is unconscious.*"). Now:
+            ;   * an onlooker who can SEE her (FindOnlookers: within range + line of sight on
+            ;     her, not out cold themselves) is named as the speaker -> that person reacts out loud;
+            ;     targetActor None = addressed to everyone nearby, as the old YAML's audience was
+            ;   * nobody sees it -> nobody is forced to speak. The passout is still RECORDED as a
+            ;     persistent event (awareness, no reaction), so her history holds the passout the
+            ;     wake block (0798) later refers to.
+            ; NOT a thought: the thought manager self-skips unconscious actors, so a thought would
+            ; be dropped the moment StartKOSlot runs. !modOff: a scene consumes the milestone
+            ; silently, like every other choke milestone.
             VTLog("CHOKE PASSOUT at elapsed=" + elapsed + "s on " + a.GetDisplayName())
-            SkyrimNetApi.DirectNarration( \
-                a.GetDisplayName() + "'s eyes flutter and roll back as the last of their strength gives out — " + \
-                "they go limp in " + playerRef.GetDisplayName() + "'s grasp, unconscious", None, None)
+            ; ★ 2026-09-12: the choke block comes DOWN before this narration is sent (measured:
+            ; the Papyrus decorator left it up, so her passout reply was told every sound she
+            ; makes is a strangled noise). And the line lost its "their strength ... they go
+            ; limp" - names, never they/their, like the three release lines.
+            VRTEMark(a, 0, 0, 0.0)
+            String poLine = a.GetDisplayName() + "'s eyes flutter and roll back, and " + a.GetDisplayName() + \
+                " goes limp in " + playerRef.GetDisplayName() + "'s grasp, unconscious."
+            if !modOff
+                Actor[] poSeen = FindOnlookers(a, 1)
+                Actor poWitness = poSeen[0]
+                if poWitness != None
+                    SkyrimNetApi.DirectNarration(poLine, poWitness, None)
+                    Debug.Trace("[V3] CHOKE PASSOUT at " + elapsed + "s on " + a.GetDisplayName() + " - block down; onlooker " + poWitness.GetDisplayName() + " reacts")
+                Else
+                    SkyrimNetApi.RegisterPersistentEvent(poLine, a, playerRef)
+                    Debug.Trace("[V3] CHOKE PASSOUT at " + elapsed + "s on " + a.GetDisplayName() + " - block down; no onlooker sees it, recorded silently")
+                EndIf
+            Else
+                Debug.Trace("[V3] CHOKE PASSOUT at " + elapsed + "s on " + a.GetDisplayName() + " - block down; scene on, nothing said")
+            EndIf
 
             StartKOSlot(a)
 
@@ -2032,39 +3529,6 @@ EndFunction
 ; ================================================================
 
 ; ================================================================
-; Register the vrtouch_contact schema.  Called on every Setup() —
-; RegisterEventSchema is idempotent (same pattern as the V2 schemas).
-; ================================================================
-Function RegisterV3Schema()
-    String f = "[" + \
-        "{\"name\":\"narration\",\"type\":0,\"required\":true,\"description\":\"Full third-person touch narration\"}," + \
-        "{\"name\":\"hand\",\"type\":0,\"required\":false,\"description\":\"Primary wand L or R\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"part\",\"type\":0,\"required\":false,\"description\":\"Primary capsule name\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"sub\",\"type\":0,\"required\":false,\"description\":\"Primary sub-region name\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"source\",\"type\":0,\"required\":false,\"description\":\"FINGER/PALM/FIST/HAND/GRAB/WEAPON/OBJECT\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"source_name\",\"type\":0,\"required\":false,\"description\":\"Weapon or object base name\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"duration\",\"type\":0,\"required\":false,\"description\":\"Primary contact duration in seconds\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"depth\",\"type\":0,\"required\":false,\"description\":\"Sub-region depth level 0-3\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"dist\",\"type\":0,\"required\":false,\"description\":\"Deepest surface distance, negative = inside\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"intensity\",\"type\":0,\"required\":false,\"description\":\"Pressure verb graded from depth\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"clothing_name\",\"type\":0,\"required\":false,\"description\":\"Clothing or armor name\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"second_hand\",\"type\":0,\"required\":false,\"description\":\"Secondary wand L or R\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"second_part\",\"type\":0,\"required\":false,\"description\":\"Secondary capsule name\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"second_source\",\"type\":0,\"required\":false,\"description\":\"Secondary source kind\",\"defaultValue\":\"\"}," + \
-        "{\"name\":\"escalation\",\"type\":0,\"required\":false,\"description\":\"1 = escalation re-emit\",\"defaultValue\":\"0\"}," + \
-        "{\"name\":\"is_private\",\"type\":0,\"required\":false,\"description\":\"1 = intimate contact, private audience\",\"defaultValue\":\"0\"}" + \
-        "]"
-    String t = "{" + \
-        "\"recent_events\":\"{{narration}} ({{hand}} {{source}}, {{sub}}, {{duration}}s) ({{time_desc}})\"," + \
-        "\"raw\":\"{{narration}}\"," + \
-        "\"compact\":\"{{hand}} {{source}} -> {{part}}\"," + \
-        "\"verbose\":\"VRTouch V3: {{narration}} [{{hand}} {{source}} on {{part}} / {{sub}}, depth={{depth}}, dist={{dist}}, {{duration}}s, esc={{escalation}}]\"" + \
-        "}"
-    SkyrimNetApi.RegisterEventSchema("vrtouch_contact", "VRTouch V3 Coalesced Contact", \
-        "Coalesced PPB touch contact (both hands, one interaction)", f, t, true, 15000, true, false)
-EndFunction
-
-; ================================================================
 ; VRTE handlers (Functions registered via RegisterForModEvent, same
 ; pattern as OnCBPC / OnVRTouchEvent — no Event declarations).
 ; ================================================================
@@ -2102,8 +3566,20 @@ Function OnVRTEContact(String eventName, String strArg, Float numArg, Form sende
     EndIf
 
     v3nContacts += 1
-    String[] f = V3Split16(strArg)
+    String[] f = V3Split35(strArg)
     V3ChokeStamp(npc, f)
+    ; A fresh VRTE_Contact is a NEW session or an escalation - either way the hold that was
+    ; being watched for a sustain upgrade is over. If this one also goes out persistent it
+    ; re-arms with its own point.
+    ; ★ 2026-09-13: a lane JOIN (ESC "2" - her left hand, the mouth ... joined a running session) is not a
+    ; new hold: the hold already being watched keeps its sustain point.
+    if f[0] != "2"
+        V3SusClear(npc)
+    EndIf
+    ; ESC "0" on a VRTE_Contact = the session's FIRST emit: nothing in it has been voiced yet.
+    if f[0] == "0"
+        V3VoicedSet(npc, 0)
+    EndIf
     V3Dispatch(npc, f, numArg, False)
 EndFunction
 
@@ -2119,7 +3595,14 @@ Function OnVRTEContactUpdate(String eventName, String strArg, Float numArg, Form
     ; reach a stamp placed inside V3Dispatch.  Guarded on chokeActive so
     ; the split costs nothing in the normal case.
     if chokeActive && npc == chokeActor
-        V3ChokeStamp(npc, V3Split16(strArg))
+        V3ChokeStamp(npc, V3Split35(strArg))
+    EndIf
+    ; ★ THE SUSTAIN CHECK (2026-09-12). Must run BEFORE the pending bail below: a hold that
+    ; already fired quietly (persistent or thought) is by construction not pending, so every update for it would
+    ; otherwise return below unseen. It never adds to the pending ring, so falling through is
+    ; safe - the bail below then returns exactly as it always did.
+    if V3SusFind(npc) >= 0
+        V3SusCheck(npc, strArg, numArg)
     EndIf
     ; Updates only matter to a session that is WAITING on a dwell delay.
     if V3PendFind(npc) < 0
@@ -2133,7 +3616,7 @@ Function OnVRTEContactUpdate(String eventName, String strArg, Float numArg, Form
         EnterSceneOff(npc)
         return
     EndIf
-    String[] f = V3Split16(strArg)
+    String[] f = V3Split35(strArg)
     V3Dispatch(npc, f, numArg, True)
 EndFunction
 
@@ -2141,6 +3624,20 @@ Function OnVRTEContactEnd(String eventName, String strArg, Float numArg, Form se
     Actor npc = sender as Actor
     if !npc
         return
+    EndIf
+    ; A line this NPC was holding for one update goes out now - her touch ended before any update came.
+    if waitActor == npc
+        String[] wf = waitF
+        Float wd = waitArgDur
+        waitActor = None
+        if wf.Length > 0
+            V3Dispatch(npc, wf, wd, True, False, -1, True)
+        EndIf
+    EndIf
+    V3SusClear(npc)   ; the hold is over - nothing left to upgrade
+    V3VoicedSet(npc, 0)
+    if kissTrailActor == npc
+        kissTrailActor = None   ; the mouth left her - a later kiss is a new act, not the trail
     EndIf
     if V3PendFind(npc) >= 0
         V3PendClear(npc)
@@ -2154,7 +3651,7 @@ Function OnVRTEContactEnd(String eventName, String strArg, Float numArg, Form se
 EndFunction
 
 ; ================================================================
-; ★ THE ADDON BUS — undress + masturbation (2026-08-23)
+; ★ THE ADDON BUS — undress (2026-08-23; masturbation left this bus on 2026-09-13 - OnPPBPlayerMasturbation)
 ; ================================================================
 ; The AddOn detects; VRTE narrates. Two rules the user set:
 ;   * While an undress is ARMED, VRTE must not narrate the grab that is doing
@@ -2165,196 +3662,741 @@ EndFunction
 ; ================================================================
 Actor  ddzUndressActor  = None      ; the NPC currently being undressed (or None)
 Float  ddzUndressAt     = 0.0       ; realtime the arm arrived — stale-guard only
+Float  ddzUndressUntil  = 0.0       ; 0 = armed, no End yet · > 0 = the End came: both hands stay muted until this
+Bool   ddAddOnLoaded    = False     ; DD SN AddOn.esp in the load order (read in Setup) - its plug events own plugs
+Bool   ddDatabaseLoaded = False     ; DD SN Database.esp in the load order (read in Setup) - it ships VRTE_DDZaZ_Native (1.3.1+: WornDeviceName)
 
-; True while the AddOn says an undress is running on this actor. The 20 s
-; stale-guard is belt-and-braces: the AddOn sends End on every exit path, but a
-; CTD or a save-load between Arm and End must not mute her forever.
+; True while an undress runs on this actor, and for the short tail after its End. The 20 s stale guard covers an
+; Arm with no End at all: PPB sends none when a pause, a load or a hot-disable drops the pair.
 Bool Function DDZIsUndressing(Actor a)
     if ddzUndressActor == None || a != ddzUndressActor
         return False
     EndIf
-    if Utility.GetCurrentRealTime() - ddzUndressAt > 20.0
+    Float now = Utility.GetCurrentRealTime()
+    if ddzUndressUntil > 0.0
+        if now < ddzUndressUntil
+            return True
+        EndIf
         ddzUndressActor = None
-        VTLog("[DDZ] undress suppression EXPIRED (no End within 20s) - un-muting")
+        return False
+    EndIf
+    if now - ddzUndressAt > 20.0
+        ddzUndressActor = None
+        VTLog("[GEAR] undress suppression EXPIRED (no End within 20s) - un-muting")
         return False
     EndIf
     return True
 EndFunction
 
-Function OnDDZUndressArm(String eventName, String strArg, Float numArg, Form sender)
+; The End came (or, for a DD device, is on its way through the AddOn): keep both hands muted `secs` more - here and
+; in the bridge. MEASURED: the grab contacts outlive PPB's End by up to 0.49 s, and the holding hand lets go
+; 0.24-0.61 s after it. When the tail runs out, a hand still on her waits its own dwell from that moment.
+Function UndressMuteTail(Actor a, Float secs)
+    if a == ddzUndressActor
+        ddzUndressUntil = Utility.GetCurrentRealTime() + secs
+    EndIf
+    VRTouchEvents_Native.TakeGestureLanes(a, secs)
+EndFunction
+
+; ★★ PPB_GestureUndressArm (2026-09-13, PPB's own event - see Setup). strArg = the capsule under the pulling hand.
+; PPB sends it when the SECOND hand grabs the worn piece, so the first hand's grab has already been on her for
+; 0.3-0.9 s (measured). The user's ruling: accept that window until PPB can announce the first hand earlier.
+Function OnPPBUndressArm(String eventName, String strArg, Float numArg, Form sender)
     Actor a = sender as Actor
-    if a == None
+    if a == None || a == playerRef
         return
     EndIf
     ddzUndressActor = a
     ddzUndressAt    = Utility.GetCurrentRealTime()
+    ddzUndressUntil = 0.0
     v3nUndressArm  += 1
-    VTLog("[DDZ] UNDRESS ARMED on " + a.GetDisplayName() + " at '" + strArg + "' - grab narration suppressed")
+    ; Both hands out of the BRIDGE as well: a Papyrus-only gate dropped the clause but never restarted the hand's
+    ; clock, so the hand still gripping her was voiced the moment the piece came off. 20 s = the stale guard.
+    VRTouchEvents_Native.TakeGestureLanes(a, 20.0)
+    VTLog("[GEAR] UNDRESS ARMED on " + a.GetDisplayName() + " at '" + strArg + "' - both hands muted")
+EndFunction
+
+; ★★ PPB_GestureUndressEnd (2026-09-13). strArg = "<name>|<slotMask>|<done>|<isDD>|<capsule>|<class>|<reason>|<sentence>"
+; (PPB build 20105 appended reason + sentence), split with the FIXED splitter so a nameless piece keeps its empty field.
+; ⚠ done=1 is a PROMISE: PPB sends it ~55 ms BEFORE it pulls the piece off. So the line is not sent here -
+;   GearOffQueue waits for the piece to be gone from her. PPB also sends a second End (done=0, reason ripfailed) when a
+;   promised removal did not happen; that cancels a queued line.
+; ★★ EVERY PIECE, DEVICES INCLUDED (the user, 2026-09-13, correcting the earlier routing): "for the DD and ZaZ equip,
+;   they still need to be narrated if equip without the AddOn, it's just that the AddOn will fire specific SkyrimNet
+;   action ... do narrate them like normal gears and all 'specific' stuff will come from the AddOn if it's in the
+;   modlist". So a DD, ZaZ or Diary of Mine piece comes off under the normal-gear rules, with or without the AddOn. A
+;   nameless DD half is named by its class ("the gag"); when the AddOn is loaded its relay (OnDDZUndressEnd) upgrades a
+;   queued line to the device's real name. PPB asks the AddOn's removal gate before it announces, so the key rule has
+;   already spoken by the time done=1 arrives.
+; ⚠ Plugs stay with the AddOn's plug events while the AddOn is loaded (they narrate every route at the interrupt tier);
+;   without it a plug is narrated here like anything else.
+; ★ fix list 41 (2026-09-13):
+;   V15 - PPB sends the End with NO sender when the actor form is gone: the mute is released for whoever was armed
+;         (the DLL releases its hand takes the same way), instead of lingering to the 20 s stale guard.
+;   V13 - a pull the LOCK refused (reason gate - the removal gate spoke before PPB announced) is told to her like a
+;         refused equip: one short-lived event, PPB's field 8 carrying the AddOn's sentence ("This device can only be
+;         removed with the Simple Skeleton Key, and will stay on otherwise."). The user: "V13 yes".
+;   V4  - R-P1 (the DD SN AddOn's request; the user: "plug removal, it will be in the AddOn"): a piece on the PLUG SLOTS
+;         (57 vaginal, 48 anal) is the AddOn's removal while it is loaded, even when PPB gives it no plug class (a Diary
+;         of Mine plug). No ordinary gear sits on those slots.
+Function OnPPBUndressEnd(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None
+        if ddzUndressActor != None
+            VTLog("[GEAR] undress End with no actor (the actor is gone) - releasing the mute on " + ddzUndressActor.GetDisplayName())
+            ddzUndressActor = None
+        EndIf
+        return
+    EndIf
+    if a == playerRef
+        return
+    EndIf
+    String[] f = V3Split12(strArg)
+    UndressMuteTail(a, 1.5)
+    Int mask = f[1] as Int
+    String show = f[0]
+    if show == "" && f[5] != ""
+        show = "the " + VRTouch_TriggerLib.V3DDType(f[5])
+    EndIf
+    if f[2] != "1"
+        if f[6] == "ripfailed"
+            GearOffCancel(a, f[0], mask)
+        ElseIf f[6] == "gate"
+            ; ★ THE DEVICE'S REAL NAME (2026-09-14, the user: "yes, that sound better for LLM awareness"). A DD rendered half has
+            ; no name of its own, so PPB's payload says "The Gag"; DD SN Database 1.3.1+ answers with the inventory half's name
+            ; (VRTE_DDZaZ_Native.WornDeviceName - their response 2026-09-14). An older Database leaves the native unbound: one
+            ; Papyrus error line, "" back, and the line falls back to what PPB sent. The second mention is the class noun
+            ; ("the gag"), so a long device name is said once and the line stays pronoun-free.
+            String realName = ""
+            if ddDatabaseLoaded
+                realName = VRTE_DDZaZ_Native.WornDeviceName(a, mask)
+            EndIf
+            String what = show
+            if realName != ""
+                what = realName
+            EndIf
+            if what != ""
+                ; string-cache fix 2026-09-15: the old tail assembled `"the " + V3DDType(cls)`,
+                ; a SHORT string that the engine's case-insensitive literal cache handed back as
+                ; PPB's "The Gag" -> "...but The Gag stayed on.". One long literal cannot collide.
+                String pulled = playerRef.GetDisplayName() + " pulled at " + what + " on " + a.GetDisplayName() + ", but the device stayed on."
+                if f[7] != ""
+                    pulled = pulled + " " + f[7]
+                EndIf
+                GearRefusedTell(a, pulled, "PULL REFUSED by the lock (name '" + realName + "' from DD SN, PPB sent '" + f[0] + "')")
+            EndIf
+        EndIf
+        VTLog("[GEAR] undress ended on " + a.GetDisplayName() + " with nothing removed - reason '" + f[6] + "' " + f[7])
+        return
+    EndIf
+    if ddAddOnLoaded && (VRTouch_TriggerLib.V3IsPlugClass(f[5]) || Math.LogicalAnd(mask, 134217728) != 0 || Math.LogicalAnd(mask, 262144) != 0)
+        VTLog("[GEAR] UNDRESS '" + show + "' cls='" + f[5] + "' slot mask " + mask + " is a plug - the AddOn's plug events own it")
+        return
+    EndIf
+    GearOffQueue(a, f[0], show, mask, f[3] == "1")
+EndFunction
+
+; ★★ Q3 - A REFUSED EQUIP (the user, 2026-09-13: "an equip event can fail due to the slot being already used or the
+; wrong location. if that happen, an shortliveenvent should be sent to the LLM" and "VRTE will narrate it, it's not
+; different from normal gears"). EVERY refused hand equip - plain gear, DD and ZaZ devices alike.
+; PPB_GestureEquipRefused (build 20105): "<name>|<slotMask>|<reason>|<blocker>|<isDD>|<class>|<zone>", numArg = hand.
+;   reason slot (a worn piece holds its slot) · clothing (a garment or device over the site) · place (held against a
+;   body part it does not go on) · refused (asked for, did not go on)
+; One short-lived event on HER, keyed per NPC so a retry replaces the last one. Fact only, no pronouns.
+; ★ 2026-09-13 (the user): hand gear lines run DURING A SCENE too - "it's only gonna happen if the player's decide to pull
+; equipment during a scene, and in this case it will need to be narrated". No modOff / scene gate on any gear sender.
+Function OnPPBEquipRefused(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None || a == playerRef
+        return
+    EndIf
+    String[] f = V3Split12(strArg)
+    String nName = a.GetDisplayName()
+    String pName = playerRef.GetDisplayName()
+    String item = f[0]
+    if item == ""
+        item = "a piece of gear"
+    EndIf
+    String blocker = f[3]
+    String reason  = f[2]
+    String where = VRTouch_TriggerLib.V3GearZoneOf(f[6], nName)
+    String narr = ""
+    if reason == "slot"
+        if blocker != ""
+            narr = pName + " tried to put " + item + " on " + where + ", but " + nName + " already wears " + blocker + " there."
+        Else
+            narr = pName + " tried to put " + item + " on " + where + ", but something " + nName + " already wears is in the way."
+        EndIf
+    ElseIf reason == "clothing"
+        if blocker != ""
+            narr = pName + " tried to put " + item + " on " + where + ", but " + blocker + " is in the way."
+        Else
+            narr = pName + " tried to put " + item + " on " + where + ", but clothing is in the way."
+        EndIf
+    ElseIf reason == "place"
+        narr = pName + " tried to put " + item + " on " + where + ", but " + item + " does not go there."
+    ElseIf blocker != ""
+        narr = pName + " tried to put " + item + " on " + nName + ", but " + blocker + " kept " + item + " from going on."
+    Else
+        narr = pName + " tried to put " + item + " on " + nName + ", but " + item + " did not stay on."
+    EndIf
+    v3nGearRefused += 1
+    GearRefusedTell(a, narr, "REFUSED (" + reason + ", isDD " + f[4] + ", zone '" + f[6] + "')")
+EndFunction
+
+; The short-lived event both refusals share - a refused equip and a pull the lock refused (V13). Keyed per NPC: the latest
+; attempt replaces the last. Never onto a body that cannot take it in (fix list 41 V7).
+Function GearRefusedTell(Actor a, String narr, String tag)
+    ; FOMOD "Equip/unequip awareness: off" - no refused-equip and no refused-pull event.
+    if !VRTouch_GearGate.IsEnabled()
+        return
+    EndIf
+    String nName = a.GetDisplayName()
+    if V3OutCold(a)
+        VTLog("[GEAR] " + tag + " on " + nName + " NOT told - dead or unconscious | " + narr)
+        return
+    EndIf
+    if V3LogOnly
+        VTLog("[GEAR] " + tag + " WOULD TELL (log-only) " + nName + " | " + narr)
+        return
+    EndIf
+    SkyrimNetApi.RegisterShortLivedEvent("vrte_gear_refused_" + VRTouchEvents_Native.FormIDDec(a), "vrte_gear_refused", \
+        narr, "", 120000, a, playerRef)
+    VTLog("[GEAR] " + tag + " on " + nName + " -> SHORT-LIVED EVENT | " + narr)
+EndFunction
+
+; ================================================================
+; ★★ NORMAL GEAR PULLED OFF (2026-09-13, the user's rulings)
+; ================================================================
+;   * "all gears removal should be a direct narration and follow the 10sec cooldown, except for slot32 gears,
+;     which is the main body, which should be an interrupt too. being put bare and naked is a significant event"
+;   * a removal that lands inside the cooldown is DROPPED (AskUserQuestion, 2026-09-13)
+;   * naked = nothing left on slots 32, 52, 49 and 56
+; The removal ring is its OWN (gearCdActor), never the touch clocks: a grope a few seconds earlier must not swallow
+; the unequip. A removal line still stamps the touch clocks, so the hand that pulled cannot pile on.
+; Fact only, no pronouns.
+Actor[]  gearOffActor           ; a removal waiting for the piece to be gone (4 slots) - WIPED every load
+Float[]  gearOffDue
+String[] gearOffName            ; the worn record's own name - what GetWornForm is matched against ("" for a DD half)
+String[] gearOffShow            ; what the line says - a class noun for a nameless DD half, the AddOn's real name if it came
+Int[]    gearOffMask
+Int[]    gearOffTries
+Actor[]  gearCdActor            ; the removal cooldown ring (8 slots) - WIPED every load
+Float[]  gearCdAt
+
+Function GearOffQueue(Actor a, String name, String show, Int mask, Bool isDD = False)
+    ; FOMOD "Equip/unequip awareness: off" - nothing is queued, so GearOffTick never
+    ; confirms and nothing is narrated. The hand-mute and held-armour gates stay live.
+    if !VRTouch_GearGate.IsEnabled()
+        return
+    EndIf
+    GearOffPut(a, name, show, mask, Utility.GetCurrentRealTime() + 0.5, 0)
+    ScheduleNextUpdate()
+EndFunction
+
+; No native calls in here - nothing can interleave while a slot is written.
+Function GearOffPut(Actor a, String name, String show, Int mask, Float due, Int tries)
+    if gearOffActor.Length < 4 || gearOffTries.Length < 4 \
+    || gearOffShow.Length < 4
+        gearOffActor = new Actor[4]
+        gearOffDue   = new Float[4]
+        gearOffName  = new String[4]
+        gearOffShow  = new String[4]
+        gearOffMask  = new Int[4]
+        gearOffTries = new Int[4]
+    EndIf
+    Int slot = gearOffActor.Find(None)
+    if slot < 0
+        slot = 0
+        Int i = 1
+        while i < 4
+            if gearOffDue[i] < gearOffDue[slot]
+                slot = i
+            EndIf
+            i += 1
+        EndWhile
+        VTLog("[GEAR] removal queue full - dropping the check for '" + gearOffShow[slot] + "'")
+    EndIf
+    gearOffActor[slot] = a
+    gearOffDue[slot]   = due
+    gearOffName[slot]  = name
+    gearOffShow[slot]  = show
+    gearOffMask[slot]  = mask
+    gearOffTries[slot] = tries
+EndFunction
+
+; The AddOn's relay carries a DD device's REAL name (its hold swaps in the inventory half's): upgrade a line still waiting.
+Function GearOffRename(Actor a, Int mask, String show)
+    if gearOffActor.Length < 4 || gearOffShow.Length < 4 || show == ""
+        return
+    EndIf
+    Int i = 0
+    while i < 4
+        if gearOffActor[i] == a && gearOffMask[i] == mask
+            gearOffShow[i] = show
+        EndIf
+        i += 1
+    EndWhile
+EndFunction
+
+; OnUpdate: narrate each announced removal once the piece is really off. Still worn 0.5 s after the End: look again every
+; 0.75 s up to 3.5 s (a DD removal is a Papyrus round trip plus DD's settle), then give up silently - PPB's corrective
+; End (ripfailed, 2.5 s) normally cancels it first.
+Function GearOffTick(Float now)
+    if gearOffActor.Length < 4 || gearOffTries.Length < 4 \
+    || gearOffShow.Length < 4
+        return
+    EndIf
+    Int i = 0
+    while i < 4
+        Actor a = gearOffActor[i]
+        if a != None && now >= gearOffDue[i]
+            String nm    = gearOffName[i]
+            String shw   = gearOffShow[i]
+            Int    mask  = gearOffMask[i]
+            Int    tries = gearOffTries[i]
+            ; Claimed BEFORE any native call: a second OnUpdate running while this one yields cannot send it twice.
+            gearOffActor[i] = None
+            if GearStillWorn(a, nm, mask)
+                if tries < 4
+                    GearOffPut(a, nm, shw, mask, Utility.GetCurrentRealTime() + 0.75, tries + 1)
+                Else
+                    v3nGearStayed += 1
+                    VTLog("[GEAR] '" + shw + "' is STILL WORN by " + a.GetDisplayName() + " 3.5 s after PPB announced it off - nothing narrated")
+                EndIf
+            Else
+                GearOffSend(a, shw, mask)
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+EndFunction
+
+Float Function GearOffWait(Float now)
+    Float w = 999999.0
+    if gearOffActor.Length < 4 || gearOffDue.Length < 4
+        return w
+    EndIf
+    Int i = 0
+    while i < 4
+        if gearOffActor[i] != None
+            Float left = gearOffDue[i] - now
+            if left < 0.05
+                left = 0.05
+            EndIf
+            if left < w
+                w = left
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+    return w
+EndFunction
+
+; True while any slot of the removed piece still holds a worn item of the same name. Each slot is asked on its own:
+; a multi-slot mask would return whatever else overlaps it (a hood on 31 for a 31+42 hat).
+Bool Function GearStillWorn(Actor a, String name, Int mask)
+    if a == None || mask == 0
+        return False
+    EndIf
+    Int b = 0
+    while b < 32
+        Int bit = Math.LeftShift(1, b)
+        if Math.LogicalAnd(mask, bit) != 0
+            Form w = a.GetWornForm(bit)
+            if w != None && w.GetName() == name
+                return True
+            EndIf
+        EndIf
+        b += 1
+    EndWhile
+    return False
+EndFunction
+
+; What still covers her after the body piece came off, as a readable list - "" when slots 32, 52, 49 and 56 are all
+; empty (naked, the user's definition), "?" when something is worn there but has no name to say.
+String Function GearLeftOn(Actor a)
+    Int[] masks = new Int[4]
+    masks[0] = 4            ; 32 body
+    masks[1] = 4194304      ; 52
+    masks[2] = 524288       ; 49
+    masks[3] = 67108864     ; 56
+    Form[] seen = new Form[4]
+    String[] names = new String[4]
+    Int n = 0
+    Bool covered = False
+    Int i = 0
+    while i < 4
+        Form w = a.GetWornForm(masks[i])
+        if w != None && seen.Find(w) < 0
+            seen[i] = w
+            covered = True
+            String nm = w.GetName()
+            if nm != ""
+                names[n] = nm
+                n += 1
+            EndIf
+        EndIf
+        i += 1
+    EndWhile
+    if !covered
+        return ""
+    EndIf
+    if n == 0
+        return "?"
+    EndIf
+    String out = names[0]
+    Int k = 1
+    while k < n
+        if k == n - 1
+            out = out + " and " + names[k]
+        Else
+            out = out + ", " + names[k]
+        EndIf
+        k += 1
+    EndWhile
+    return out
+EndFunction
+
+; Send one confirmed removal (the gates are checked at send time).
+Function GearOffSend(Actor a, String name, Int mask)
+    String nName = a.GetDisplayName()
+    Float  now   = Utility.GetCurrentRealTime()
+    String why   = ""
+    ; (fix list 41 V7) never onto a dead or knocked-out body - the body piece would be a GLOBAL interrupt + a forced reply.
+    ; ★ No scene gate any more (the user, 2026-09-13): a piece pulled off during a scene is narrated.
+    if V3OutCold(a)
+        why = "she is dead or unconscious"
+    EndIf
+    String piece = name
+    if piece == ""
+        piece = "a piece of clothing"
+    EndIf
+    if why != ""
+        VTLog("[GEAR] OFF '" + piece + "' on " + nName + " NOT narrated - " + why)
+        return
+    EndIf
+    String pName = playerRef.GetDisplayName()
+    Bool body = (Math.LogicalAnd(mask, 4) == 4)
+    if body
+        ; ★ The body piece: always an INTERRUPT, past the removal cooldown - "being put bare and naked is a
+        ; significant event and should be recognized".
+        String left = GearLeftOn(a)
+        String narr = pName + " pulled " + piece + " off " + nName + "."
+        if left == ""
+            narr = pName + " pulled " + piece + " off " + nName + ", leaving " + nName + " naked."
+        ElseIf left != "?"
+            narr = pName + " pulled " + piece + " off " + nName + ", leaving " + nName + " in only " + left + "."
+        EndIf
+        GearCdStamp(a, now)     ; stamped FIRST - the SkyrimNet calls below yield
+        if V3LogOnly
+            VTLog("[GEAR] OFF (body) WOULD FIRE (log-only) on " + nName + " | " + narr)
+            return
+        EndIf
+        ; The cut is GLOBAL, so it runs only when SHE is talking (V3CutIfTalking, 2026-09-15).
+        V3CutIfTalking(a, "body piece pulled off")
+        SkyrimNetApi.DirectNarration(narr, a, playerRef)
+        V3RecordFire(a, True)
+        v3nGearOff += 1
+        v3nUndressFire += 1
+        if left == ""
+            v3nGearNaked += 1
+        EndIf
+        VTLog("[GEAR] OFF (body, slot 32) on " + nName + " left on 32/52/49/56='" + left + "' -> INTERRUPT + DIRECT NARRATION | " + narr)
+        return
+    EndIf
+    if GearCdRecent(a, now)
+        v3nGearOffCd += 1
+        VTLog("[GEAR] OFF '" + piece + "' on " + nName + " DROPPED - a removal line went out on " + nName + " under " + (GlobalCooldown as Int) + " s ago")
+        return
+    EndIf
+    GearCdStamp(a, now)
+    String narr2 = pName + " pulled " + piece + " off " + nName + "."
+    if V3LogOnly
+        VTLog("[GEAR] OFF WOULD FIRE (log-only) on " + nName + " | " + narr2)
+        return
+    EndIf
+    SkyrimNetApi.DirectNarration(narr2, a, playerRef)
+    V3RecordFire(a, False)
+    v3nGearOff += 1
+    v3nUndressFire += 1
+    VTLog("[GEAR] OFF (slot mask " + mask + ") on " + nName + " -> DIRECT NARRATION | " + narr2)
+EndFunction
+
+; True when a removal line went out on her less than GlobalCooldown seconds ago. Read-only.
+Bool Function GearCdRecent(Actor a, Float now)
+    if gearCdActor.Length < 8
+        return False
+    EndIf
+    Int i = gearCdActor.Find(a)
+    if i < 0
+        return False
+    EndIf
+    ; A small NEGATIVE age is a stamp written a moment after `now` was read (the handlers yield) - still recent.
+    Float age = now - gearCdAt[i]
+    return age > -2.0 && age < GlobalCooldown
+EndFunction
+
+; Stamp a removal line: her own slot, else an empty one, else the oldest.
+Function GearCdStamp(Actor a, Float now)
+    if gearCdActor.Length < 8
+        gearCdActor = new Actor[8]
+        gearCdAt    = new Float[8]
+    EndIf
+    Int slot = gearCdActor.Find(a)
+    if slot < 0
+        slot = gearCdActor.Find(None)
+    EndIf
+    if slot < 0
+        slot = 0
+        Int i = 1
+        while i < 8
+            if gearCdAt[i] < gearCdAt[slot]
+                slot = i
+            EndIf
+            i += 1
+        EndWhile
+    EndIf
+    gearCdActor[slot] = a
+    gearCdAt[slot]    = now
 EndFunction
 
 ; strArg = "<piece>|<slotMask>|<done>|<isDD>|<capsule>"
+; ═══════════════════════════════════════════════════════════════════════
+; ★★ MOVED TO THE ADDON (2026-08-29, the user's ruling - report 29 §0.6k):
+; OnDDZPlugInserted/Removed narration, OnDDZDeviceMenuOn/Off, DDZDeviceName,
+; DDZPlugWhere and DDZWitness now live in VRTEDD_Controller.psc. The AddOn is
+; the mouth for everything its own sinks see; VRTE narrates only the player's
+; gesture equip/undress.
+;
+; ⚠ THE TWO STUBS BELOW ARE PACING, NOT NARRATION. A plug event still stamps
+; the INTIMATE cooldown clock so a touch cannot be narrated right on top of a
+; plug insertion - the user's prioritization rule ("a boob touch versus a
+; soulgem nipple piercing installed"). The AddOn speaks; this only paces.
+; ═══════════════════════════════════════════════════════════════════════
+Function OnDDZPlugInserted(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a != None && !modOff
+        V3RecordFire(a, True)
+        v3nPlugIn += 1
+    EndIf
+EndFunction
+
+Function OnDDZPlugRemoved(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a != None && !modOff
+        V3RecordFire(a, True)
+        v3nPlugOut += 1
+    EndIf
+EndFunction
+
+; ★★★ THE INTERRUPT RULE (2026-09-15, the user): "Every single interrupt event we push to SkyrimNet will be interrupt ONLY if
+; the NPC's that the interrupt is going to is currently talking. If not, don't do an interrupt. So that if someone else is talking,
+; they are not the one getting interrupted. [...] And we do that, for every single one we push, so that only when the NPC that is
+; talking is stopping. Including the finger in the mouth."
+; SkyrimNet's cut is GLOBAL - it stops whoever is speaking - so it runs only when the speaker IS the NPC the line is about.
+; "Talking" = VRTouchEvents.dll's IsTalking, DD SN Database 1.3.9's definition: her voice is playing, she is between two lines of
+; one reply, or her reply is still being written. The cut is PurgeDialogue(False) - it stops her line now AND drops what was
+; queued behind it, so her old reply cannot play after the reaction line (the call DD SN's gag cut and the choke release make).
+; Not talking: nothing is cut; the line that follows is sent exactly as before and waits its turn.
+; Every site that used to call TriggerInterruptDialogue / PurgeDialogue calls this instead: the kiss, the finger/touch interrupt
+; tier (V3Dispatch), the knockdown and leg sweep, the body piece pulled off, the choke landing at 3 s, the choke release.
+Bool Function V3CutIfTalking(Actor a, String what)
+    if a == None
+        return False
+    EndIf
+    if !VRTouchEvents_Native.IsTalking(a)
+        VTLog("[INTERRUPT] " + what + " on " + a.GetDisplayName() + " - not the one talking, nothing cut")
+        return False
+    EndIf
+    Int cut = SkyrimNetApi.PurgeDialogue(False)
+    if cut == 1
+        VTLog("[INTERRUPT] " + what + " on " + a.GetDisplayName() + " - was talking, the line was cut mid-word")
+    Else
+        VTLog("[INTERRUPT] " + what + " on " + a.GetDisplayName() + " - was talking, the reply was dropped before its voice started")
+    EndIf
+    return True
+EndFunction
+
+; ★★ THE PLUG STAMP AT THE ACT ITSELF (2026-09-14, the user: "yes, do the PPB event").
+; PPB_GesturePlug is PPB's own edge: "<in|out>|<name>|<class>|<siteMask>|<leftHand>", sent the instant a fingertip extraction
+; is granted (after the DD/ZaZ removal gate said yes - a refused pull sends nothing) or an insertion is confirmed (PPB doc 26 §3).
+; The AddOn's spoken line (VRTE_DDZaZ_PlugRemoved / PlugInserted above) now arrives 1.5-4.5 s LATER: since DD SN v1.2.7 every
+; removal is held 1.5 s so DD's own re-fit flicker is never narrated, and the hold drains on their 3 s poll (their response
+; 2026-09-14). Stamping only on their line left that gap open - the finger still at the orifice earned a touch line inside it,
+; which their late interrupt then cut. So the INTIMATE clock is stamped HERE, at the act; their line re-stamps when it lands.
+; ⚠ Only while the AddOn is loaded: without it nobody narrates a plug pull (the user's ruling 1) and an insertion is VRTE's own
+; gear line (OnPPBDeviceEquipped), which stamps for itself.
+Function OnPPBGesturePlug(String eventName, String strArg, Float numArg, Form sender)
+    Actor a = sender as Actor
+    if a == None || a == playerRef || !ddAddOnLoaded
+        return
+    EndIf
+    String[] f = V3Split12(strArg)
+    if f[0] != "in" && f[0] != "out"
+        return
+    EndIf
+    V3RecordFire(a, True)
+    VTLog("[GEAR] PLUG " + f[0] + " '" + f[1] + "' cls='" + f[2] + "' site=" + f[3] + " on " + a.GetDisplayName()         + " - intimate clock stamped at the act (the AddOn's line follows)")
+EndFunction
+
+; ★ 2026-09-13 (afternoon): THE ADDON'S RELAY NARRATES NOTHING. Every piece - DD devices included - is narrated from PPB's
+; own End (OnPPBUndressEnd), with or without the AddOn (the user: "do narrate them like normal gears and all 'specific'
+; stuff will come from the AddOn"). The relay is read for a DD device only, for two things the AddOn's hold knows:
+;   done=1 - the inventory half's REAL name ("Black Leather Ball Strap Gag" instead of "the gag"): a line still waiting
+;            for the piece to come off is upgraded to it (GearOffRename)
+;   done=0 - DD refused the unlock after PPB announced the pull: the waiting line is dropped
+; ⛔ THE EMPTY-NAME FIELD SHIFT (measured 2026-08-30): read with the FIXED splitter - StringUtil.Split drops the empty
+; name of a DD half and slides every field left.
 Function OnDDZUndressEnd(String eventName, String strArg, Float numArg, Form sender)
     Actor a = sender as Actor
-    if a != None && a == ddzUndressActor
-        ddzUndressActor = None          ; un-suppress FIRST, whatever follows
-    EndIf
-    if a == None
+    if a == None || a == playerRef
         return
     EndIf
-    String[] f = StringUtil.Split(strArg, "|")
-    if f.Length < 5
+    String[] f = V3Split12(strArg)
+    if f[1] == "" || f[3] != "1"
         return
     EndIf
-    if f[2] != "1"
-        VTLog("[DDZ] undress cancelled on " + a.GetDisplayName() + " - nothing removed, un-muted")
-        return
-    EndIf
-    String piece = f[0]
-    if piece == ""
-        ; ★ 2026-08-24. A DD device's WORN half carries NO name - the name lives
-        ; on the inventory half (AddOn report 23 §30), and what comes off in
-        ; your hand is the worn one. So a gag used to narrate as "a piece of
-        ; their gear", which is useless in the history the LLM keeps.
-        ; The AddOn now also sends the CLASS, read off the half it actually
-        ; pulled (the worn half DOES carry the class keywords), so the device
-        ; dictionary can name the THING even when the record cannot name itself.
-        String cls = ""
-        if f.Length >= 6
-            cls = f[5]
-        EndIf
-        if cls != ""
-            piece = "the " + VRTouch_TriggerLib.V3DDType(cls)
-        Else
-            piece = "a piece of their gear"
-        EndIf
-    EndIf
-    Int    slotMask = f[1] as Int
-    String capsule  = f[4]
-
-    ; --- tier, per the user's rule ---------------------------------------
-    ; over the BREAST -> interrupt · slot 32 body gear -> DirectNarration ·
-    ; anything else -> persistent event. The capsule test uses case-SENSITIVE
-    ; Find, matching V3MapKey's own "BACK" convention - PPB spells breasts in
-    ; caps ("BREAST R"/"BREAST L").
-    Bool overBreast = (StringUtil.Find(capsule, "BREAST") >= 0)
-    Bool isSlot32   = (Math.LogicalAnd(slotMask, 4) == 4)
-
-    ; Statement of fact only - what was removed and what that leaves. No
-    ; feeling words: the LLM decides how she takes it (report 19 §1).
-    String narr = playerRef.GetDisplayName() + " pulled " + piece + " off " \
-        + a.GetDisplayName() + ", leaving that part of them bare."
-
-    if overBreast
-        SkyrimNetApi.TriggerInterruptDialogue(false)
-        SkyrimNetApi.DirectNarration(narr, a, playerRef)
-        V3RecordFire(a, True)
-        v3nUndressFire += 1
-        VTLog("[DDZ] UNDRESS INTERRUPT (over the breast) on " + a.GetDisplayName() + " | " + narr)
-    ElseIf isSlot32
-        SkyrimNetApi.DirectNarration(narr, a, playerRef)
-        V3RecordFire(a, False)
-        v3nUndressFire += 1
-        VTLog("[DDZ] UNDRESS SPEAK (slot 32) on " + a.GetDisplayName() + " | " + narr)
+    Int mask = f[1] as Int
+    if f[2] == "1"
+        GearOffRename(a, mask, f[0])
     Else
-        SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
-        v3nUndressFire += 1
-        VTLog("[DDZ] UNDRESS PERSISTENT on " + a.GetDisplayName() + " | " + narr)
+        GearOffCancel(a, "", mask)
     EndIf
 EndFunction
 
-; ================================================================
-; MASTURBATION - the player reaching full erection, seen by whoever can see it.
-; ================================================================
-; User's rule: fire ONLY on the soft -> full transition. Maintaining at full is
-; spam, so the ADDON edge-detects and sends only the crossing; VRTE fires on
-; every event it receives and does no de-duplication of its own.
-;
-; Range 15 m. Skyrim is ~70 units per metre => 1050 units, and the witness must
-; actually SEE it: HasLOS plus vanilla perception (IsDetectedBy respects sneak,
-; light and distance) - the same pair the choke's assault witness uses.
-;
-; Capped at 4 witnesses ON PURPOSE: each is a persistent event landing in that
-; NPC's ~35-entry context window (NpcThoughts.yaml eventHistoryCount). A crowded
-; tavern would otherwise flood every bystander's memory with one act.
-Function OnDDZMasturbation(String eventName, String strArg, Float numArg, Form sender)
-    if modOff
+; Drop a queued removal line for this NPC - by the worn record's name, or (name "") by the slot mask. PPB's corrective End
+; (reason ripfailed) or the AddOn's refused DD unlock said it never came off.
+Function GearOffCancel(Actor a, String name, Int mask)
+    if gearOffActor.Length < 4 || gearOffName.Length < 4
         return
     EndIf
-    String narr = playerRef.GetDisplayName() + " is openly stroking themselves to full hardness, in plain view."
-    Int found = 0
-    Int tries = 0
-    Actor lastSeen = None
-    while tries < 12 && found < 4
-        Actor probe = Game.FindRandomActorFromRef(playerRef, 1050.0)
-        if probe != None && probe != playerRef && probe != lastSeen \
-        && !probe.IsDead() && !probe.IsDisabled() && !probe.IsChild()
-            if probe.HasLOS(playerRef) && playerRef.IsDetectedBy(probe)
-                SkyrimNetApi.RegisterPersistentEvent(narr, probe, playerRef)
-                found += 1
-                lastSeen = probe
-                VTLog("[DDZ] MASTURBATION witnessed by " + probe.GetDisplayName())
-            EndIf
+    Int i = 0
+    while i < 4
+        if gearOffActor[i] == a && gearOffMask[i] == mask && (name == "" || gearOffName[i] == name)
+            gearOffActor[i] = None
+            VTLog("[GEAR] queued removal of '" + gearOffShow[i] + "' on " + a.GetDisplayName() + " CANCELLED - it never came off")
         EndIf
-        tries += 1
+        i += 1
     EndWhile
-    v3nMasturbation += 1
-    VTLog("[DDZ] MASTURBATION lvl=" + strArg + " - " + found + " witness(es) within 15m with line of sight")
 EndFunction
 
+; A fixed 12-field splitter that keeps empty fields in place (StringUtil.Split drops them). Fields past 12 land in [11].
+String[] Function V3Split12(String s)
+    String[] out = new String[12]
+    Int idx = 0
+    Int start = 0
+    Int slen = StringUtil.GetLength(s)
+    while idx < 11
+        Int p = StringUtil.Find(s, "|", start)
+        if p < 0
+            if start < slen
+                out[idx] = StringUtil.Substring(s, start)
+            EndIf
+            return out
+        EndIf
+        if p > start
+            out[idx] = StringUtil.Substring(s, start, p - start)
+        EndIf
+        start = p + 1
+        idx += 1
+    EndWhile
+    if start < slen
+        out[11] = StringUtil.Substring(s, start)
+    EndIf
+    return out
+EndFunction
+
+; (OnDDZMasturbation moved to the AddOn 2026-08-29, and on 2026-09-13 the user moved masturbation back into VRTE
+;  for good - OnPPBPlayerMasturbation consumes PPB's own event; the AddOn relay and its line are removed.)
+
 ; ================================================================
-; * A DEVIOUS DEVICE WENT ON (2026-08-23)
+; * A DEVIOUS DEVICE WENT ON - narrated like normal gear (2026-09-13)
 ; ================================================================
-; strArg = "<name>|<classSuffix>|<locked>|<quest>|<siteMask>|<slotMask>"
-;
-; TWO events, per the user's rule, because the wearer and a bystander know
-; genuinely different things:
-;   * the WEARER gets mechanism AND sensation - what it is doing to their body.
-;     Persistent: it is a lasting STATE, not a moment, and forcing a line the
-;     instant it clicks shut would pre-empt the roleplay rather than feed it.
-;   * WATCHERS get only what is visible from outside. No sensation - they cannot
-;     feel it. Same 15 m / line-of-sight rule as the masturbation witnesses.
-; Neither ever says pain, fear or shame - the LLM decides how it lands.
-Function OnDDZDeviceEquipped(String eventName, String strArg, Float numArg, Form sender)
+; PPB_GestureDeviceEquipped, consumed DIRECTLY: "<name>|<classSuffix>|<locked>|<quest>|<siteMask>|<slotMask>|<force>".
+; PPB sends it instead of GearEquipped for a piece with a Devious class; <name> is the held (inventory) half's name.
+; ★ The user, 2026-09-13: "for the DD and ZaZ equip, they still need to be narrated if equip without the AddOn, it's just
+;   that the AddOn will fire specific SkyrimNet action, but yes, do narrate them like normal gears and all 'specific'
+;   stuff will come from the AddOn if it's in the modlist". So the SAME line and pacing as any gear (GearOnSend), with or
+;   without the AddOn. The device-specific wearer line (mechanism, sensation) and the onlooker lines that used to go out
+;   here through the AddOn's relay (VRTE_DDZaZ_DeviceEquipped, now unregistered) are the AddOn's to provide.
+; ⚠ A plug is still left to the AddOn's own plug event (interrupt tier, every route) while the AddOn is loaded.
+Function OnPPBDeviceEquipped(String eventName, String strArg, Float numArg, Form sender)
     Actor a = sender as Actor
-    if a == None || modOff
+    if a == None || a == playerRef
         return
     EndIf
-    String[] f = StringUtil.Split(strArg, "|")
-    if f.Length < 6
+    String[] f = V3Split12(strArg)
+    if ddAddOnLoaded && VRTouch_TriggerLib.V3IsPlugClass(f[1])
+        VTLog("[GEAR] ON '" + f[0] + "' cls='" + f[1] + "' is a plug - the AddOn's plug event owns it")
         return
     EndIf
-    String devName = f[0]
-    String cls     = f[1]
-    Bool   locked  = (f[2] == "1")
-    Bool   quest   = (f[3] == "1")
-
-    String wearerLine = VRTouch_TriggerLib.V3DDWearerLine(playerRef.GetDisplayName(), \
-        a.GetDisplayName(), devName, cls, locked, quest)
-    SkyrimNetApi.RegisterPersistentEvent(wearerLine, a, playerRef)
+    String item = f[0]
+    if item == "" && f[1] != ""
+        item = "the " + VRTouch_TriggerLib.V3DDType(f[1])
+    EndIf
     v3nDevice += 1
-    VTLog("[DDZ] DEVICE cls='" + cls + "' locked=" + f[2] + " on " + a.GetDisplayName() + " | " + wearerLine)
+    if ddAddOnLoaded && (V3StateDeviceClass(f[1]) || V3StateWornPiece(a, f[5] as Int))
+        V3StateDeviceHold(a, item)
+    EndIf
+    GearOnSend(a, item, f[5] as Int, f[6])
+EndFunction
 
-    ; --- and whoever could see it happen -----------------------------------
-    String seenLine = VRTouch_TriggerLib.V3DDWitnessLine(playerRef.GetDisplayName(), \
-        a.GetDisplayName(), devName, cls, locked)
-    Int found = 0
-    Int tries = 0
-    Actor lastSeen = None
-    while tries < 12 && found < 4
-        Actor probe = Game.FindRandomActorFromRef(a, 1050.0)
-        if probe != None && probe != a && probe != playerRef && probe != lastSeen \
-        && !probe.IsDead() && !probe.IsDisabled() && !probe.IsChild()
-            if probe.HasLOS(a) && a.IsDetectedBy(probe)
-                SkyrimNetApi.RegisterPersistentEvent(seenLine, probe, playerRef)
-                found += 1
-                lastSeen = probe
+; ★ RULING #2 (the user, 2026-09-13): "sound like a good plan, but only for device with State that change the NPC's
+; behavior/answer". The AddOn's DeviceFitted (a persistent event, never spoken) reads the SAME PPB event about one task tick
+; after this script does, so an equip line spoken at once can reach the LLM before her context says the gag holds her jaw
+; open. While DD SN AddOn.esp is loaded, a device in one of the AddOn's STATE rows waits 0.3 s first; anything else goes at
+; once. The rows are the AddOn's kBuiltinKw table (tools/VRTE-DDZaZ-plugin/src/DeviceEquip.cpp): gag · blind · arms · legs ·
+; all · deaf. ⚠ zad_DeviousGloves is NOT in it (the AddOn counts a glove only by name) and neither is a collar or a belt.
+Bool Function V3StateDeviceClass(String cls)
+    if cls == ""
+        return False
+    EndIf
+    return StringUtil.Find(cls, "Gag") == 0 || cls == "Blindfold" || cls == "Hood" || cls == "HeavyBondage" \
+        || StringUtil.Find(cls, "Armbinder") == 0 || StringUtil.Find(cls, "Yoke") == 0 || cls == "ElbowTie" \
+        || cls == "BondageMittens" || cls == "CuffsFront" || StringUtil.Find(cls, "Boxbinder") >= 0 \
+        || cls == "StraitJacket" || StringUtil.Find(cls, "HobbleSkirt") == 0 || cls == "AnkleShackles" \
+        || cls == "PonyGear" || cls == "Boots" || cls == "PetSuit"
+EndFunction
+
+; The same rows by KEYWORD, on the piece that just went on (every slot bit of its mask, one bit at a time). This is the
+; route for ZaZ / Diary of Mine restraints, which carry no DD class, and a backstop for a DD class name not listed above.
+Bool Function V3StateWornPiece(Actor a, Int slotMask)
+    if a == None || slotMask == 0
+        return False
+    EndIf
+    String kws = ",zad_DeviousGag,zad_DeviousGagLarge,zad_DeviousGagPanel,zad_DeviousGagBit,zad_DeviousGagRing,zad_DeviousGagTape,zad_DeviousGagInflatable,zbfWornGag,DOMWornGag" \
+        + ",zad_DeviousBlindfold,zad_DeviousHood,zbfWornBlindfold,DOMWornBlindfold" \
+        + ",zad_DeviousHeavyBondage,zad_DeviousArmbinder,zad_DeviousArmbinderElbow,zad_DeviousYoke,zad_DeviousYokeBB,zad_DeviousElbowTie,zad_DeviousBondageMittens,zad_DeviousCuffsFront,zadNG_DeviousBoxbinder,zadNG_DeviousYokeFront,zad_DeviousStraitJacket,zbfWornYoke,zbfEffectNoFighting,DOMWornArmbinder,DOMWornCuffsBack,DOMWornWrist,DOMWornCuffsCrossed,DOMWornYoke" \
+        + ",zad_DeviousHobbleSkirt,zad_DeviousHobbleSkirtRelaxed,zad_DeviousAnkleShackles,zad_DeviousPonyGear,zad_DeviousBoots,zbfWornAnkles,zbfEffectSlowMove,DOMWornAnkle" \
+        + ",zad_DeviousPetSuit,"
+    Form last = None
+    Int b = 0
+    while b < 32
+        Int bit = Math.LeftShift(1, b)
+        if Math.LogicalAnd(slotMask, bit) != 0
+            Form piece = a.GetWornForm(bit)
+            if piece != None && piece != last
+                last = piece
+                Int n = piece.GetNumKeywords()
+                Int k = 0
+                while k < n
+                    Keyword kw = piece.GetNthKeyword(k)
+                    if kw != None && StringUtil.Find(kws, "," + kw.GetString() + ",") >= 0
+                        return True
+                    EndIf
+                    k += 1
+                EndWhile
             EndIf
         EndIf
-        tries += 1
+        b += 1
     EndWhile
-    if found > 0
-        VTLog("[DDZ] DEVICE seen by " + found + " onlooker(s) | " + seenLine)
-    EndIf
+    return False
+EndFunction
+
+Function V3StateDeviceHold(Actor a, String item)
+    VTLog("[GEAR] ON '" + item + "' on " + a.GetDisplayName() + " is a state device - line held 0.3 s for the AddOn's DeviceFitted")
+    Utility.Wait(0.3)
 EndFunction
 
 ; ================================================================
@@ -2425,7 +4467,9 @@ EndFunction
 ; ================================================================
 ; * ORDINARY GEAR WENT ON (2026-08-23)
 ; ================================================================
-; strArg = "<name>|<slotMask>"
+; strArg = "<name>|<slotMask>|<force>" - PPB_GestureGearEquipped, consumed DIRECTLY since 2026-09-13 (it used to
+; arrive only as the AddOn's VRTE_DDZaZ_GearEquipped rename, i.e. never without DD SN AddOn.esp). PPB sends it
+; 1.2 s after the piece went on, once it checked the piece is really worn.
 ;
 ; User: "the last thing we miss is normal gear equip... A normal persistentEvent
 ; to the NPC we give it to. Normal neutral tone as usual, we don't tell NPC how
@@ -2439,428 +4483,652 @@ EndFunction
 ; should know about later, not a moment that needs a reaction now - and a plain
 ; equip that INTERRUPTED would be intolerable by the third piece of an outfit.
 ;
-; The AddOn decides what counts as "ordinary": a DD-scripted device carries a
-; class and goes out as VRTE_DDZaZ_DeviceEquipped instead, so the two events
-; can never both fire for one item.
-Function OnDDZGearEquipped(String eventName, String strArg, Float numArg, Form sender)
+; PPB decides what counts as "ordinary": a DD-scripted device carries a class and goes out as PPB_GestureDeviceEquipped
+; (OnPPBDeviceEquipped) instead, so the two events never both fire for one item.
+; ★ 2026-09-13 (afternoon, the user): ZaZ / Diary of Mine restraints (<ordinary> 0 since PPB build 20105) are narrated
+; HERE like any gear, with or without the AddOn - "all 'specific' stuff will come from the AddOn if it's in the modlist".
+; The AddOn's relay (VRTE_DDZaZ_GearEquipped) is no longer listened to.
+Function OnPPBGearEquipped(String eventName, String strArg, Float numArg, Form sender)
     Actor a = sender as Actor
-    if a == None || a == playerRef || modOff
+    if a == None || a == playerRef
         return
     EndIf
-    String[] f = StringUtil.Split(strArg, "|")
-    if f.Length < 2
+    String[] f = V3Split12(strArg)
+    if f[1] == ""
         return
     EndIf
-    String item = f[0]
+    ; <ordinary> 0 = a ZaZ / Diary of Mine restraint (PPB build 20105); the AddOn's DeviceFitted reads it too (ruling #2).
+    if ddAddOnLoaded && f[3] == "0" && V3StateWornPiece(a, f[1] as Int)
+        V3StateDeviceHold(a, f[0])
+    EndIf
+    GearOnSend(a, f[0], f[1] as Int, f[2])
+EndFunction
+
+; One equip line, for every piece. Statement of fact and nothing else: what went on, and where. No verb of feeling, no
+; reaction cue - report 19 §1, and the user: "we don't tell NPC how they feel or how to react".
+; ★ 2026-09-13: pronoun-free now - "<P> just put Hide Boots on Carmella's feet." (it read "...on Carmella. It sits on
+; their feet.") via V3GearOnNamed; a slot it cannot place gives "<P> just put <item> on <N>."
+; Pacing unchanged: DirectNarration once per GlobalCooldown per NPC (V3DevNarrReady), else a persistent event.
+; ★ THE FORCE GRADE (the user, 2026-09-13: "yes, we want it. just add it to the equip, it's one word in the LLM prompt").
+; PPB's <force> (GearEquipped field 2, DeviceEquipped field 6) is graded from the gesture's peak press depth: 0 gentle,
+; 1 firm, 2 forced. ★ The user (2026-09-13): "gently and firmly, just no description for normal equip, so it make more
+; sense" -> 0 "gently put", 1 (the ordinary press) "put", 2 "firmly put". A physical fact about the press, not a feeling.
+; No field (an older PPB) = "put".
+Function GearOnSend(Actor a, String item, Int slotMask, String force = "")
+    ; FOMOD "Equip/unequip awareness: off" - no equip line.
+    if !VRTouch_GearGate.IsEnabled()
+        return
+    EndIf
     if item == ""
         item = "a piece of gear"
     EndIf
-    Int slotMask = f[1] as Int
-
-    ; Statement of fact and nothing else: what went on, and where it sits. No
-    ; verb of feeling, no reaction cue - report 19 §1, and the user again today:
-    ; "we don't tell NPC how they feel or how to react".
-    String narr = playerRef.GetDisplayName() + " just put " + item + " on " \
-        + a.GetDisplayName() + ". It sits " + VRTouch_TriggerLib.V3GearWhere(slotMask) + "."
-    SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
+    String how = " put "
+    if force == "0"
+        how = " gently put "
+    ElseIf force == "2"
+        how = " firmly put "
+    EndIf
+    String narr = playerRef.GetDisplayName() + how + item + " " \
+        + VRTouch_TriggerLib.V3GearOnNamed(slotMask, a.GetDisplayName()) + "."
+    ; V7 (fix list 41): a dead or knocked-out NPC is told nothing (she cannot hear it; the same gate as every touch line).
+    if V3OutCold(a)
+        VTLog("[GEAR] ON NOT narrated - " + a.GetDisplayName() + " is dead or unconscious | " + narr)
+        return
+    EndIf
+    if V3LogOnly
+        VTLog("[GEAR] ON WOULD FIRE (log-only) slot=" + slotMask + " on " + a.GetDisplayName() + " | " + narr)
+        return
+    EndIf
+    if V3DevNarrReady(a)
+        SkyrimNetApi.DirectNarration(narr, a, playerRef)
+        ; V10 (fix list 41): stamp the touch clock like GearOffSend, so a hand still resting on the collar it just
+        ; closed does not add a touch line 0.2 s after this one.
+        V3RecordFire(a, False)
+    else
+        SkyrimNetApi.RegisterPersistentEvent(narr, a, playerRef)
+    EndIf
     v3nGearEquip += 1
-    VTLog("[DDZ] GEAR slot=" + slotMask + " on " + a.GetDisplayName() + " | " + narr)
+    VTLog("[GEAR] ON slot=" + slotMask + " on " + a.GetDisplayName() + " | " + narr)
 EndFunction
 
 ; ================================================================
 ; V3Dispatch — the single policy funnel for Contact + Update.
 ; fromUpdate=True means we are re-testing a pending dwell wait (stay
 ; quiet while still short; fire once the duration crosses the delay).
+;
+; ★★ 2026-09-13 — ONE LINE PER NPC FOR EVERYTHING TOUCHING HER (the user's ruling).
+; VRTouchEvents.dll sends up to FOUR clauses, one per source lane (right hand · left hand · the player's
+; head · the player's genital) - payload layout in V3Split35. The user: "if both hand, genital and head all
+; touch at the same time ... VRTE simply see all four and publish that information", as ONE combined line,
+; the loudest tier winning. Before this, the head and the genital shared the right hand's slot in the bridge
+; and the loser was silently dropped.
+;   * each clause runs its OWN gates (key, undress, plug, grab gate, combat hit, plausibility, hover, the
+;     kiss mute) - a failing clause is dropped, never the whole event (a choke arm still takes it all)
+;   * VOICED vs FRESH (v3VoicedMask): a lane that already went out this session is CONTEXT - it is named
+;     again, but only FRESH lanes (not yet voiced, or the one that escalated) decide the dwell, the tier and
+;     the cooldown. So a late arrival is judged on its own, and an old line is never re-sent because
+;     something else joined.
+;   * a FRESH clause waits its OWN dwell on its own lane clock (DUR); until it is ready it is NOT named, and
+;     she stays pending so the next update re-tests it
+;   * ESC ("1") belongs to clause 0 alone - the bridge puts the lane that escalated there
+;   * the tier is the loudest FRESH READY clause: Interrupt > Speak > Thought > Persistent (per clause the
+;     old precedence holds: Persistent, then Thought, then Interrupt, then Speak)
+;   * private if ANY named clause is private; a clause from the player's MOUTH always is (user)
+;   * arousal from the named clause with the highest baseline
 ; ================================================================
-Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
-    String w1    = f[0]
-    String src1  = f[1]
-    String name1 = f[2]
-    String part1 = f[3]
-    String sub1  = f[4]
-    Int    dep1  = f[5] as Int
-    Float  dist1 = f[6] as Float
-    String w2    = f[7]
-    String src2  = f[8]
-    String name2 = f[9]
-    String part2 = f[10]
-    String sub2  = f[11]
-    Int    dep2  = 0
-    if f[12] != ""
-        dep2 = f[12] as Int
-    EndIf
-    Float  dist2 = 0.0
-    if f[13] != ""
-        dist2 = f[13] as Float
-    EndIf
-    Bool esc = (f[15] == "1")
+Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate, Bool sustain = False, Int sustainK = -1, Bool noWait = False)
+    String npcName = npc.GetDisplayName()
 
-    ; ★ MALE UPDATE (2026-08-23): resolve the touched actor's sex ONCE.
-    ; PPB's contact carries no sex field (its skeleton string is race-only),
-    ; and PPB itself resolves sex exactly this way internally.  Only
-    ; V3MapKey consumes it — routing decides everything downstream.
+    ; ★ MALE UPDATE (2026-08-23): resolve the touched actor's sex ONCE. PPB's contact carries no sex
+    ; field, and PPB itself resolves sex exactly this way. Only V3MapKey consumes it.
     Int isMale = 0
     ActorBase npcBase = npc.GetLeveledActorBase()
     if npcBase && npcBase.GetSex() == 0
         isMale = 1
     EndIf
 
-    ; ★ PLAYER GENITAL SOURCE — THE SLOT-52 GATE IS PPB'S, NOT OURS.
-    ;
-    ; The user's rule ("slot 52 empty -> NO CONTACT") is satisfied UPSTREAM:
-    ; PPB 2.0.0 tears the wand down whenever GenitalProbe::IsExposed is false,
-    ; which tests skin->HasPartOf(slot 52) for CAPABILITY *and* no worn armor
-    ; on 52 for STATE (HandBox.cpp WandLifecycle: "putting trousers on tears
-    ; the wand down within a frame").  No wand -> no segments -> no contacts.
-    ;
-    ; ⛔ VRTE briefly carried its own gate here and it was EXACTLY INVERTED:
-    ; it dropped when GetWornForm(52) was None, which is precisely the state
-    ; PPB emits in (the schlong lives on the SKIN, which Papyrus GetWornForm
-    ; cannot see at all — it only reports worn ARMOR).  The two gates in
-    ; series would have dropped 100% of genital contacts and the feature
-    ; would have looked simply dead.  Caught by reading PPB's source rather
-    ; than trusting "it's wired" — 2026-08-23.  Do not re-add it.
-    ;
-    ; Counted purely as a DIAGNOSTIC: if this stays 0 while the player is
-    ; exposed and touching an NPC, the fault is upstream in PPB's wand
-    ; lifecycle, not in VRTE's policy.
-    Bool isGenSrc = (src1 == "GENITAL" || f[8] == "GENITAL")
-    if isGenSrc
-        v3nGenSource += 1
-    EndIf
+    String[] cW     = new String[4]
+    String[] cSrc   = new String[4]
+    String[] cName  = new String[4]
+    String[] cPart  = new String[4]
+    String[] cSub   = new String[4]
+    Int[]    cDep   = new Int[4]
+    Float[]  cDist  = new Float[4]
+    Float[]  cDur   = new Float[4]
+    String[] cKey   = new String[4]
+    Int[]    cArm   = new Int[4]
+    String[] cCloth = new String[4]
+    Float[]  cDelay = new Float[4]
+    Bool[]   cUse   = new Bool[4]
+    Bool[]   cGrab  = new Bool[4]
+    Bool[]   cMouth = new Bool[4]
+    Bool[]   cReady = new Bool[4]
+    Bool[]   cFresh = new Bool[4]
+    Bool[]   cEsc   = new Bool[4]
+    Bool[]   cName2 = new Bool[4]    ; named in the line
 
-    ; ================================================================
-    ; ★ CHOKE ARMING (PART B1) — the choke now ARMS from PPB.
-    ; ================================================================
-    ; V2 armed the choke off a CBPC neck marker, which on a PPB-DRIVEN
-    ; NPC can never fire: report 18 §3b measured 1 CBPC event on M'rissi
-    ; against 188 on a non-driven NPC, so the V2 choke was effectively
-    ; DEAD on exactly the actors V3 is built for.  PPB reports a throat
-    ; grab cleanly and in-band as sub="Neck" + src="GRAB" (proven live,
-    ; report 18 §3a), so arming moves here.
-    ;
-    ; ONLY the arming moves.  Everything after it is still V2's and is
-    ; untouched: TickChoke polls HiggsVR.GetGrabbedObject on both hands
-    ; plus the grab-tracking vars for liveness (proven to hold through
-    ; the passout ragdoll) and owns every milestone, the passout, the
-    ; KO slot and the kill.
-    ;
-    ; A throat grab NEVER produces a normal contact event — whichever
-    ; branch runs, we clear any pending dwell and return.
-    ;
-    ; The scene test is duplicated here (it normally sits further down,
-    ; after the key resolve) because this branch returns BEFORE reaching
-    ; it and StartChoke is a heavy state change — mute, BlockActivation,
-    ; PurgeDialogue, StartCombat at 5s — that would shatter a SexLab /
-    ; OStim scene.  V2 was covered by OnCBPC's ScenesSuppress check, and
-    ; on a PPB-driven NPC that check may never run (CBPC barely fires on
-    ; them at all — that is the whole reason arming moved here).  The
-    ; gates are stubs returning False in the base mod, so this costs
-    ; nothing unless a scene patch is installed.
-    ; The GRAB-SUPPRESSION GATE is consulted here for the same reason V2
-    ; consults it in OnObjectGrabbed BEFORE its own choke detection: with
-    ; the optional "No Follower Grab" patch installed, a protected actor
-    ; must not be chokeable at all.  V2 returned before StartChoke; V3 now
-    ; does the same, so the patch keeps its documented meaning ("grab
-    ; triggers AND choke initiation suppressed for this actor") instead of
-    ; being silently bypassed by the new arming path.  Base mod = stub
-    ; returning False, so this costs one call and changes nothing.
-    ; ★ 2026-08-23: the choke arms on the FRONT NECK capsule only (PPB v2.0
-    ; slot 7 child 1, shipped ~2.5u proud so a frontal grab lands on it).
-    ; A grab from behind lands on the main capsule ("neck / throat") and
-    ; falls through to ordinary narration — being held by the nape is not
-    ; being choked.  Liveness stamping (V3ChokeStamp) deliberately stays
-    ; actor-level: once a choke IS running, any grab contact keeps it alive,
-    ; because the victim squirms and the hand wanders off the capsule.
-    if sub1 == "Neck" && src1 == "GRAB" && VRTouch_TriggerLib.V3IsNeckFrontPart(part1)
-        if VRTouch_GrabGate.ShouldSuppressGrab(npc)
-            VTLog("[V3] CHOKE ARM SUPPRESSED (grab gate) on " + npc.GetDisplayName())
-        ElseIf V3InScene(npc)
-            VTLog("[V3] CHOKE ARM SUPPRESSED (scene gate) on " + npc.GetDisplayName())
-        ElseIf V3LogOnly
-            ; Shadow mode: log the candidate, never arm.
-            VTLog("[V3] CHOKE-CANDIDATE (log-only — would arm StartChoke) on " + npc.GetDisplayName() + " dur=" + dur)
-        ElseIf chokeActive && npc == chokeActor
-            ; Already choking THIS actor — just refresh the contact stamp.
-            chokeLastContact = Utility.GetCurrentRealTime()
-        ElseIf !chokeActive
-            ; StartChoke re-checks its own guards (re-arm lockout, KO-slot
-            ; kill-run detection, hand latch) — we only gate on the state
-            ; it cannot see from here.  Log the RESULT, not the intent: on
-            ; the 1s re-arm lockout StartChoke returns without arming, and
-            ; an "ARMED" line written beforehand would be a lie in the log.
-            ;
-            ; Seed the hand latch and the PPB liveness stamp from THIS tuple
-            ; before arming.  StartChoke's HIGGS probes refine chokeIsLeft if
-            ; they resolve; if they do not, the arming contact's own wand is
-            ; the better answer (the old grabActor_L fallback is deleted).
-            ; chokeLastContact must be fresh at t=0 or the 1s-settle liveness
-            ; test would see a 2s-stale PPB witness and end the choke instantly.
-            chokeIsLeft      = (w1 == "L")
-            chokeLastContact = Utility.GetCurrentRealTime()
-            StartChoke(npc)
-            if chokeActive && chokeActor == npc
-                v3nChokeArm += 1
-                VTLog("[V3] CHOKE ARMED (PPB Neck/GRAB) on " + npc.GetDisplayName() + " dur=" + dur)
-            Else
-                VTLog("[V3] CHOKE ARM REJECTED by StartChoke (re-arm lockout) on " + npc.GetDisplayName() + " dur=" + dur)
+    ; ★ PLAYER GENITAL SOURCE — THE SLOT-52 GATE IS PPB'S, NOT OURS (2026-08-23). PPB tears the genital
+    ; wand down whenever the player is not exposed, so a GENITAL clause only ever arrives when he is.
+    ; ⛔ VRTE once carried its own GetWornForm(52) gate here and it was EXACTLY INVERTED (the schlong lives
+    ; on the SKIN, which GetWornForm cannot see) - it dropped 100% of genital contacts. Do not re-add it.
+    ; The counters are diagnostics: 0 while touching means the fault is upstream in PPB.
+    Int presentMask = 0
+    Int k = 0
+    while k < 4
+        Int b = 3 + k * 8
+        if f[b + 1] != ""
+            cW[k]    = f[b]
+            cSrc[k]  = f[b + 1]
+            cName[k] = f[b + 2]
+            cPart[k] = f[b + 3]
+            cSub[k]  = f[b + 4]
+            if f[b + 5] != ""
+                cDep[k] = f[b + 5] as Int
+            EndIf
+            if f[b + 6] != ""
+                cDist[k] = f[b + 6] as Float
+            EndIf
+            if f[b + 7] != ""
+                cDur[k] = f[b + 7] as Float
+            EndIf
+            cUse[k]   = True
+            cGrab[k]  = (cSrc[k] == "GRAB")
+            cMouth[k] = VRTouch_TriggerLib.V3MouthSource(cSrc[k], cName[k])
+            presentMask = Math.LogicalOr(presentMask, V3LaneBit(cW[k]))
+            if cSrc[k] == "GENITAL"
+                v3nGenSource += 1
+            ElseIf cMouth[k]
+                v3nMouthSource += 1
             EndIf
         EndIf
-        ; (chokeActive on a DIFFERENT actor: leave the running choke
-        ;  alone and stay silent — one choke at a time, as in V2.)
-        V3PendClear(npc)
-        return
+        k += 1
+    EndWhile
+    ; ESC "1" = clause 0 escalated (the bridge puts the causing lane first). It belongs to that clause ALONE.
+    cEsc[0] = (f[0] == "1") && cUse[0]
+    ; Voiced lanes persist through the session: the BRIDGE decides whether a lane that left and came back is new (it
+    ; sends a JOIN) or the same contact (it puts it back silently - final verify 2026-09-13).
+    Int voiced = V3VoicedGet(npc)
+    ; ★ A JOIN (ESC "2") puts the lane that came (back) in clause 0 - the bridge only sends it for a lane absent from
+    ; its previous event. So clause 0 is NEW even if a stale voiced bit survived (verify 2026-09-13: a hand that lifted
+    ; and came back onto her breast was treated as already said).
+    if f[0] == "2" && cUse[0]
+        voiced = Math.LogicalAnd(voiced, Math.LogicalXor(15, V3LaneBit(cW[0])))
+        ; V2 (fix list 41): write the cleared bit BACK. Every Update after the JOIN re-reads the ring, so a joined lane
+        ; still under its dwell on the JOIN itself was read as already said on the next Update and never spoken.
+        V3VoicedSet(npc, voiced)
+    EndIf
+    ; The kiss trail belongs to a mouth still on her: once the head lane is gone, it is over.
+    if kissTrailActor == npc && Math.LogicalAnd(presentMask, 4) == 0
+        kissTrailActor = None
     EndIf
 
-    ; --- Key resolve ---
-    String key = VRTouch_TriggerLib.V3MapKey(sub1, part1, isMale)
-    if key == ""
-        v3nUnmapped += 1
-        ; Shout a NEW unknown name once, loudly — it means PPB's sub-region
-        ; vocabulary has moved and V3MapKey needs a row, which is otherwise
-        ; invisible behind a 4 Hz stream of identical lines.
-        if V3NoteUnmapped(sub1)
-            VTLog("[V3] ★ UNMAPPED SUB-REGION '" + sub1 + "' (capsule '" + part1 + "') — no V3MapKey row. " \
-                + "Every contact on it is being DROPPED; add it to V3MapKey + V3PartOf.")
-        ElseIf !fromUpdate
-            VTLog("[V3] UNMAPPED sub=" + sub1 + " part=" + part1 + " — dropped")
+    ; ★★ THE KISS MUTE (2026-09-12), per CLAUSE and per PART since 2026-09-13. While PPB has a kiss up on her
+    ; (PPB_MouthLips ...|HEAD) and for 3 s after it ends, a HEAD-source clause on her FACE (lips, face, ear,
+    ; the mouth keys) is part of the kiss KissSpeak already voiced - PPB: the HEAD:mouth contacts flicker between
+    ; her lips and nose through one kiss. Only that clause is dropped; her other contacts still speak, and a
+    ; mouth on her neck or chest is not the flicker, so it is never muted.
+    ; ★ THE KISS TRAIL (user, 2026-09-13): a MOUTH clause muted here keeps her PENDING, so the next update
+    ; re-tests the mouth once it moves off her face (lips -> neck without pulling back), and that line passes
+    ; the clocks KissSpeak stamped, once (kissTrailActor, valid 10 s after the last muted pass or until the
+    ; session ends).
+    Bool mouthMuted = False
+    if KissMutes(npc)
+        k = 0
+        while k < 4
+            if cUse[k] && cSrc[k] == "HEAD"
+                String headKey = VRTouch_TriggerLib.V3MapKey(cSub[k], cPart[k], isMale)
+                if VRTouch_TriggerLib.V3IsFaceFamily(headKey) || VRTouch_TriggerLib.V3IsMouthKey(headKey)
+                    cUse[k] = False
+                    ; ANY muted head clause keeps her pending - PPB's single HEAD contact can read "face" for a
+                    ; moment when the front of the head box wins, and that must not end the trail (review).
+                    mouthMuted = True
+                    if cMouth[k]
+                        kissTrailActor = npc
+                        kissTrailUntil = Utility.GetCurrentRealTime() + 10.0
+                    EndIf
+                    VTLog("[V3] HEAD contact muted - part of the kiss on " + npcName + " (" + cPart[k] + ")")
+                EndIf
+            EndIf
+            k += 1
+        EndWhile
+        if !cUse[0]
+            cEsc[0] = False
         EndIf
-        V3PendClear(npc)
-        return
-    EndIf
-    Bool isGrab = (src1 == "GRAB")
-
-    ; ★ UNDRESS SUPPRESSION (2026-08-23). The AddOn is mid-undress on this
-    ; actor: the two-hand grab doing it must NOT also be narrated as a grope.
-    ; The AddOn sends the real event when the piece actually comes off.
-    if isGrab && DDZIsUndressing(npc)
-        v3nUndressGate += 1
-        VTLog("[V3] SUPPRESSED (undress in progress): " + key + " on " + npc.GetDisplayName())
-        V3PendClear(npc)
-        return
-    EndIf
-
-    ; --- Grab-suppression gate (parity with OnObjectGrabbed) ---
-    ; src=GRAB IS a HIGGS grab (PpbTouchAPI.h kSourceGrab), so the same
-    ; optional patch that stops V2 narrating a protected actor's grab must
-    ; stop V3 narrating it.  Touch contacts are unaffected — exactly as in
-    ; V2, where the gate sits in OnObjectGrabbed only.
-    if isGrab && VRTouch_GrabGate.ShouldSuppressGrab(npc)
-        v3nGrabGate += 1
-        VTLog("[V3] SUPPRESSED (grab gate): " + key + " on " + npc.GetDisplayName())
-        V3PendClear(npc)
-        return
     EndIf
 
     ; ================================================================
-    ; ★ THE COMBAT GATE — inherited from the deleted V2 weapon path, and
-    ; the single most important thing that had to survive the CBPC removal.
+    ; ★ CHOKE ARMING (PART B1) — the choke ARMS from PPB, on ANY clause.
     ; ================================================================
-    ; PPB reports a weapon contact for ANY blade near a driven NPC, including
-    ; one that is mid-swing and taking her health off.  Narrating that as a
-    ; social touch would produce "Telord is pressing their Iron Sword into
-    ; Carmella's chest" for every hit of a real fight.
-    ;
-    ; V2 caught this in FireWeaponTrigger via the plugin's TESHitEvent sink
-    ; ("WEAPON SUPPRESSED (real hit, not a touch)" — seen working in the
-    ; 2026-08-02 10:00 combat log).  That whole function is gone, so the gate
-    ; moves here.  It is deliberately NOT applied to hands or GRAB: a punch
-    ; registers as a hit too, but a hand on an NPC you are fighting is still
-    ; a social act worth narrating, and that was V2's behaviour as well.
-    ;
-    ; A gentle blade-rest deals no damage, so WasHitRecently stays False and
-    ; deliberate weapon-touch narration still works.  Returns False when the
-    ; DLL is absent, which fails toward narrating rather than silence.
-    if src1 == "WEAPON" || src1 == "OBJECT"
-        if VRTouchEvents_Native.WasHitRecently(npc, 1.5)
-            v3nCombatHit += 1
-            VTLog("[V3] SUPPRESSED (real hit, not a touch): " + key + " src=" + src1 + " on " + npc.GetDisplayName())
+    ; PPB reports a throat grab cleanly as sub="Neck" + src="GRAB" on the FRONT NECK capsule only
+    ; (PPB v2.0 slot 7 child 1, ~2.5u proud so a frontal grab lands on it; a grab from behind lands on
+    ; "neck / throat" and narrates as an ordinary neck hold). ★ 2026-09-13: tested on every clause - a
+    ; mouth or a breast outranks the neck, and a kiss must not stop a choke from arming.
+    ; Only the ARMING lives here; TickChoke owns liveness, every milestone, the passout, the KO slot and
+    ; the kill. The scene test is duplicated because StartChoke is a heavy state change that would shatter a
+    ; SexLab / OStim scene; the GRAB-SUPPRESSION GATE too ("No Follower Grab" patch; a stub in the base mod).
+    Int ck = -1
+    k = 0
+    while k < 4 && ck < 0
+        if cUse[k] && cGrab[k] && cSub[k] == "Neck" && VRTouch_TriggerLib.V3IsNeckFrontPart(cPart[k])
+            ck = k
+        EndIf
+        k += 1
+    EndWhile
+    if ck >= 0
+        if chokeActive && npc == chokeActor
+            ; Already choking THIS actor: refresh the liveness stamp and drop the throat clause only - the
+            ; choke gag below still handles everything else, including the free-hand thought (review).
+            chokeLastContact = Utility.GetCurrentRealTime()
+            cUse[ck] = False
+            if ck == 0
+                cEsc[0] = False
+            EndIf
+        Else
+            if VRTouch_GrabGate.ShouldSuppressGrab(npc)
+                VTLog("[V3] CHOKE ARM SUPPRESSED (grab gate) on " + npcName)
+            ElseIf V3InScene(npc)
+                VTLog("[V3] CHOKE ARM SUPPRESSED (scene gate) on " + npcName)
+            ElseIf V3LogOnly
+                VTLog("[V3] CHOKE-CANDIDATE (log-only — would arm StartChoke) on " + npcName + " dur=" + dur)
+            ElseIf !chokeActive
+                ; Seed the hand latch and the PPB liveness stamp from THIS clause before arming; StartChoke's
+                ; HIGGS probes refine chokeIsLeft if they resolve. chokeLastContact must be fresh at t=0 or the
+                ; 1s-settle liveness test would end the choke instantly. Log the RESULT, not the intent.
+                chokeIsLeft      = (cW[ck] == "L")
+                chokeLastContact = Utility.GetCurrentRealTime()
+                StartChoke(npc)
+                if chokeActive && chokeActor == npc
+                    v3nChokeArm += 1
+                    VTLog("[V3] CHOKE ARMED (PPB Neck/GRAB) on " + npcName + " dur=" + dur)
+                Else
+                    VTLog("[V3] CHOKE ARM REJECTED by StartChoke (re-arm lockout) on " + npcName + " dur=" + dur)
+                EndIf
+            EndIf
+            ; (chokeActive on a DIFFERENT actor: leave the running choke alone - one choke at a time.)
             V3PendClear(npc)
             return
         EndIf
     EndIf
 
-    ; --- Armor state (updates lastArmor -> GetLastArmorName) ---
-    ; V3ArmorState, NOT GetArmorState(V3SlotKey(...)): the face family
-    ; needs the 44->30 helmet chain and the interior ladder must probe
-    ; the pelvis slots only (49->52), never body slot 32.  See PART D.
-    Int arm = V3ArmorState(npc, key)
-    String clothName = GetLastArmorName()
-
-    ; --- Plausibility: interior contact through armor = detection artefact ---
-    if VRTouch_TriggerLib.V3PlausibilityDrop(key, arm)
-        v3nPlausibility += 1
-        VTLog("[V3] PLAUSIBILITY DROP key=" + key + " arm=" + arm + " (interior contact through armor) on " + npc.GetDisplayName())
-        V3PendClear(npc)
-        return
-    EndIf
-
-    ; --- Interior claim must be earned: hover is not "inside" ---
-    ; A positive distU is OUTSIDE the capsule surface. PPB reports hover as
-    ; contact by design (apiTouchU 1.0 ~ 1 cm), and the palate capsule sits about
-    ; that far behind the cheek — so a finger on the cheek reads as the palate.
-    ; Drop the interior verdict rather than narrate "sliding into their mouth"
-    ; for a touch on the side of the face. The surface parts of the same session
-    ; still report normally.
-    if VRTouch_TriggerLib.V3RequiresPenetration(key) && dist1 >= 0.0
-        v3nHoverDrop += 1
-        VTLog("[V3] HOVER DROP key=" + key + " part='" + part1 + "' dist=" + dist1             + " (>=0 means OUTSIDE the capsule — not inside) on " + npc.GetDisplayName())
-        V3PendClear(npc)
-        return
-    EndIf
-
-    ; --- Per-(part,armor) delay vs the session's primary duration ---
-    ; Escalations fire IMMEDIATELY (user rule 3) — no dwell wait.
-    Float delay = VRTouch_TriggerLib.V3GetDelay(key, isGrab, arm) * DelayMultiplier
-    ; ★ The genital source overrides the body part's dwell (user, 2026-08-23):
-    ; it is hard enough to land at all without also holding a hip's 4s timer.
-    if isGenSrc
-        delay = VRTouch_TriggerLib.V3GenSourceDelay() * DelayMultiplier
-    EndIf
-    if !esc && dur < delay
+    ; ★ 2026-09-13 (fix list 41 V1): NOTHING IS NARRATED ONTO A BODY THAT CANNOT ANSWER. A DirectNarration forces a
+    ; spoken reply, and SkyrimNet picks the addressed NPC even when she is out cold (measured: "it picked THE VICTIM").
+    ; PPB keeps publishing contacts on anything short of true death, and VRTE's own KO keeps her Paralysis + Unconscious.
+    ; ⚠ PLACED AFTER THE CHOKE ARMING ON PURPOSE: a throat grab on an NPC already knocked out must still arm the
+    ; kill-run (StartChoke's isKillRun) - a guard at the top of V3Dispatch would have silently removed it.
+    if V3OutCold(npc)
         if !fromUpdate
-            v3nPending += 1
-            V3PendAdd(npc)
-            VTLog("[V3] PENDING key=" + key + " dur=" + dur + " < delay=" + delay + " on " + npc.GetDisplayName())
+            VTLog("[V3] NOT narrated - " + npcName + " is dead or unconscious")
         EndIf
-        return    ; a later VRTE_ContactUpdate re-tests with a fresh duration
+        V3PendClear(npc)
+        return
     EndIf
-    V3PendClear(npc)
 
-    ; --- Gates, in order: scene, choke gag, cooldown (mirrors FireTrigger) ---
+    ; ================================================================
+    ; PER-CLAUSE GATES — a clause that fails is DROPPED; the others carry on.
+    ; ================================================================
+    Int alive = 0
+    k = 0
+    while k < 4
+        if cUse[k]
+            String clauseKey = VRTouch_TriggerLib.V3MapKey(cSub[k], cPart[k], isMale)
+            cKey[k] = clauseKey
+            if clauseKey == ""
+                v3nUnmapped += 1
+                ; Shout a NEW unknown name once, loudly — PPB's sub-region vocabulary moved.
+                if V3NoteUnmapped(cSub[k])
+                    VTLog("[V3] ★ UNMAPPED SUB-REGION '" + cSub[k] + "' (capsule '" + cPart[k] + "') — no V3MapKey row. " \
+                        + "Every contact on it is being DROPPED; add it to V3MapKey + V3PartOf.")
+                ElseIf !fromUpdate
+                    VTLog("[V3] UNMAPPED sub=" + cSub[k] + " part=" + cPart[k] + " — dropped")
+                EndIf
+                cUse[k] = False
+            ElseIf (cW[k] == "R" || cW[k] == "L") && DDZIsUndressing(npc)
+                ; ★ UNDRESS SUPPRESSION (2026-08-23; 2026-09-13 EVERY hand clause, not only GRAB): the two hands
+                ; doing the undress are not a grope, and a palm or a finger of the same pull is not one either.
+                ; The removal line says what happened. The bridge takes both hand lanes too (TakeGestureLanes) -
+                ; this catches a payload that was already on its way.
+                v3nUndressGate += 1
+                VTLog("[V3] SUPPRESSED (undress in progress): " + clauseKey + " src=" + cSrc[k] + " on " + npcName)
+                cUse[k] = False
+            ElseIf cSrc[k] == "OBJECT" && VRTouch_TriggerLib.V3PlugSiteOfKey(clauseKey) == "" && V3HeldArmor(cW[k])
+                ; ★ A HELD PIECE OF ARMOUR IS NEVER A TOUCH (user, 2026-09-13: an equip must not "end up as a
+                ; contact event"). It is on its way to being worn - PPB_GestureGearEquipped says so if it goes on -
+                ; or it fails and PPB says nothing yet. This replaces the 3 s dwell FLOOR, which a fumbled or
+                ; refused equip outlasted (measured refused holds 2.2-4.2 s) and a DD inventory half (slot mask 0)
+                ; never met at all. Plug sites keep their narration: the plug events are the AddOn's.
+                v3nGearHeld += 1
+                if !fromUpdate
+                    VTLog("[V3] SUPPRESSED (a held armour piece, not a touch): " + clauseKey + " name=" + cName[k] + " on " + npcName)
+                EndIf
+                cUse[k] = False
+            ElseIf V3PlugGated(npc, clauseKey)
+                v3nPlugGate += 1
+                VTLog("[V3] SUPPRESSED (orifice plugged): " + clauseKey + " src=" + cSrc[k] + " on " + npcName)
+                cUse[k] = False
+            ElseIf cGrab[k] && VRTouch_GrabGate.ShouldSuppressGrab(npc)
+                ; Grab-suppression gate (parity with V2's OnObjectGrabbed) - touches are unaffected.
+                v3nGrabGate += 1
+                VTLog("[V3] SUPPRESSED (grab gate): " + clauseKey + " on " + npcName)
+                cUse[k] = False
+            ElseIf (cSrc[k] == "WEAPON" || cSrc[k] == "OBJECT") && VRTouchEvents_Native.WasHitRecently(npc, 1.5)
+                ; ★ THE COMBAT GATE: a blade that is taking her health off is a fight, not a touch. Hands
+                ; and GRAB are exempt (V2's behaviour). Returns False without the DLL -> fails toward narrating.
+                v3nCombatHit += 1
+                VTLog("[V3] SUPPRESSED (real hit, not a touch): " + clauseKey + " src=" + cSrc[k] + " on " + npcName)
+                cUse[k] = False
+            Else
+                ; V3ArmorState, NOT GetArmorState(V3SlotKey(...)): the face family needs the 44->30 helmet
+                ; chain and the interior ladder must probe the pelvis slots only (49->52).
+                Int clauseArm = V3ArmorState(npc, clauseKey)
+                cArm[k]   = clauseArm
+                cCloth[k] = GetLastArmorName()
+                if VRTouch_TriggerLib.V3PlausibilityDrop(clauseKey, clauseArm)
+                    ; interior contact through armor = a detection artefact
+                    v3nPlausibility += 1
+                    VTLog("[V3] PLAUSIBILITY DROP key=" + clauseKey + " arm=" + clauseArm + " (interior contact through armor) on " + npcName)
+                    cUse[k] = False
+                ElseIf VRTouch_TriggerLib.V3RequiresPenetration(clauseKey) && cDist[k] >= 0.0
+                    ; hover is not "inside": a positive distU is OUTSIDE the capsule (PPB reports hover as
+                    ; contact by design, and the palate sits about that far behind the cheek)
+                    v3nHoverDrop += 1
+                    VTLog("[V3] HOVER DROP key=" + clauseKey + " part='" + cPart[k] + "' dist=" + cDist[k] \
+                        + " (>=0 means OUTSIDE the capsule — not inside) on " + npcName)
+                    cUse[k] = False
+                Else
+                    alive += 1
+                EndIf
+            EndIf
+        EndIf
+        k += 1
+    EndWhile
+    if !cUse[0]
+        cEsc[0] = False   ; the clause that escalated was dropped: nothing left carries its ESC (review)
+    EndIf
+    if alive == 0
+        if mouthMuted
+            V3PendAdd(npc)   ; the kiss trail
+        Else
+            V3PendClear(npc)
+        EndIf
+        return
+    EndIf
+
+    ; ================================================================
+    ; FRESH vs VOICED, and each FRESH clause's own dwell (on its lane clock).
+    ; ================================================================
+    Bool anyFreshReady   = False
+    Bool anyFreshUnready = False
+    Int  firstK = -1
+    k = 0
+    while k < 4
+        if cUse[k]
+            ; A sustain upgrade makes only the HELD clause fresh (verify 2026-09-13): the others keep their own rules.
+            Bool susK = sustain && k == sustainK
+            cFresh[k] = susK || cEsc[k] || Math.LogicalAnd(voiced, V3LaneBit(cW[k])) == 0
+            Float dly = VRTouch_TriggerLib.V3GetDelay(cKey[k], cGrab[k], cArm[k]) * DelayMultiplier
+            ; ★ The genital source overrides the body part's dwell (user, 2026-08-23), and the player's
+            ; mouth takes the same flat dwell (2026-09-12): hard enough to land at all without a hip's 4s.
+            if cSrc[k] == "GENITAL" || cMouth[k]
+                dly = VRTouch_TriggerLib.V3GenSourceDelay() * DelayMultiplier
+            EndIf
+            ; (The 2026-08-26 held-armour dwell FLOOR is gone: since 2026-09-13 a held armour piece is dropped at
+            ;  the gates above - V3HeldArmor.)
+            cDelay[k] = dly
+            if cFresh[k]
+                cReady[k] = cEsc[k] || susK || cDur[k] >= dly
+                if cReady[k]
+                    anyFreshReady = True
+                Else
+                    anyFreshUnready = True
+                    if firstK < 0
+                        firstK = k
+                    EndIf
+                EndIf
+                ; Named when it is ready; a fresh clause still inside its dwell waits its own turn.
+                cName2[k] = cReady[k]
+            Else
+                cName2[k] = True    ; already voiced: named again as context
+            EndIf
+        EndIf
+        k += 1
+    EndWhile
+    if !anyFreshReady
+        if anyFreshUnready || mouthMuted
+            if !fromUpdate && firstK >= 0
+                v3nPending += 1
+                VTLog("[V3] PENDING key=" + cKey[firstK] + " dur=" + cDur[firstK] + " < delay=" + cDelay[firstK] \
+                    + " (" + alive + " clause(s)) on " + npcName)
+            EndIf
+            V3PendAdd(npc)
+        Else
+            V3PendClear(npc)   ; nothing new on her - every clause here was already voiced
+        EndIf
+        return    ; a later VRTE_ContactUpdate re-tests with fresh durations
+    EndIf
+    ; Keep re-testing while a fresh clause is still short of its dwell, or the kiss trail is owed.
+    Bool keepPending = anyFreshUnready || mouthMuted
+    V3PendClear(npc)
+    if keepPending
+        V3PendAdd(npc)
+    EndIf
+
+    ; --- Gates, in order: scene, choke gag, cooldown ---
     if V3InScene(npc)
         v3nSceneGate += 1
-        VTLog("[V3] SUPPRESSED (scene gate): " + key + " on " + npc.GetDisplayName())
+        VTLog("[V3] SUPPRESSED (scene gate) on " + npcName)
         return
     EndIf
     if chokeActive && npc == chokeActor
         v3nChokeGag += 1
-        ; ★ THE FREE-HAND EXCEPTION, preserved from the deleted FireGrabHold.
-        ; A choked NPC is gagged — she cannot speak, so every reaction for her
-        ; is suppressed.  But V2 made ONE exception worth keeping: if the
-        ; player's OTHER hand grabs her while the first is on her throat, she
-        ; still NOTICES it, as an unvoiced thought.  It is the only channel a
-        ; strangled NPC has left.  Stated as bare fact, like every other
-        ; narration — what the free hand did and where, nothing about how it
-        ; feels (see V3Narration's rule).
-        ; Guarded on isGrab so an incidental brush from the choking arm can
-        ; never trip it, and on the wand differing from the choking hand.
-        if isGrab && (w1 == "L") != chokeIsLeft && !modOff
-            String freeNarr = playerRef.GetDisplayName() + "'s free hand takes hold of " \
-                + npc.GetDisplayName() + VRTouch_TriggerLib.V3PartOf(sub1, part1) \
-                + VRTouch_TriggerLib.V3PreciseOf(sub1, part1) + "."
-            SkyrimNetApi.GenerateNPCThought(npc, freeNarr)
-            VTLog("[V3] CHOKE free-hand thought on " + npc.GetDisplayName() + " | " + freeNarr)
-            return
+        ; ★ THE FREE-HAND EXCEPTION (from the deleted FireGrabHold). A choked NPC is gagged, but if the
+        ; player's OTHER hand grabs her while the first is on her throat she still NOTICES it, as one
+        ; unvoiced thought - stated as bare fact.
+        if !modOff
+            k = 0
+            while k < 4
+                if cUse[k] && cFresh[k] && cReady[k] && cGrab[k] && (cW[k] == "L") != chokeIsLeft
+                    String freeNarr = playerRef.GetDisplayName() + "'s free hand takes hold of " \
+                        + npcName + VRTouch_TriggerLib.V3PartOf(cSub[k], cPart[k]) \
+                        + VRTouch_TriggerLib.V3PreciseOf(cSub[k], cPart[k]) + "."
+                    SkyrimNetApi.GenerateNPCThought(npc, freeNarr)
+                    V3VoicedSet(npc, Math.LogicalOr(voiced, V3LaneBit(cW[k])))
+                    VTLog("[V3] CHOKE free-hand thought on " + npcName + " | " + freeNarr)
+                    return
+                EndIf
+                k += 1
+            EndWhile
         EndIf
-        VTLog("[V3] SUPPRESSED (choke gag): " + key + " on " + npc.GetDisplayName())
+        VTLog("[V3] SUPPRESSED (choke gag) on " + npcName)
         return
     EndIf
-    Bool interrupting = esc || VRTouch_TriggerLib.V3IsInterrupting(key, arm, isGrab)
-    Bool asThought    = VRTouch_TriggerLib.V3IsThought(key, arm, isGrab)
-    ; ★ THE FOURTH TIER (2026-08-23): armored-state contacts go out as
-    ; SkyrimNet PERSISTENT EVENTS — context without a forced reaction.
-    ; Overrides the thought tier where both would apply (the rule is
-    ; literally "armored Though rows become persistent").  Never for an
-    ; interrupt or an escalation.
-    Bool asPersistent = False
-    if !interrupting && VRTouch_TriggerLib.V3IsPersistent(key, isGrab, arm)
-        asPersistent = True
-        asThought    = False
+
+    ; ================================================================
+    ; THE TIER — the loudest FRESH READY clause decides (Interrupt > Speak > Thought > Persistent).
+    ; ================================================================
+    ;   * Gear never interrupts (user, 2026-08-26) - ESC sits INSIDE that gate.
+    ;   * THE FOURTH TIER (2026-08-23): armored "Though" rows become PERSISTENT - context, no reaction.
+    ;   * Per clause the OLD precedence holds (review 2026-09-13): Persistent, then Thought, then Interrupt -
+    ;     an escalation onto a thought row stays a thought, exactly as before.
+    ;   * THE ARMOR FLOOR: a genital-source contact (2026-08-23) and a mouth contact (2026-09-12) always at
+    ;     least SPEAK, whatever she wears. They still never force an interrupt on their own.
+    ;   * THE SUSTAIN UPGRADE (2026-09-12): the second, louder fire of a quiet hold = plain Speak.
+    Int d = -1
+    Int bestRank = 0
+    k = 0
+    while k < 4
+        if cUse[k] && cFresh[k] && cReady[k]
+            Bool mayInt = (cSrc[k] != "OBJECT" && cSrc[k] != "WEAPON")
+            Bool kInt = mayInt && (cEsc[k] || VRTouch_TriggerLib.V3IsInterrupting(cKey[k], cArm[k], cGrab[k], cSrc[k]))
+            Bool kTho = VRTouch_TriggerLib.V3IsThought(cKey[k], cArm[k], cGrab[k])
+            Bool kPer = False
+            if !kInt && VRTouch_TriggerLib.V3IsPersistent(cKey[k], cGrab[k], cArm[k])
+                kPer = True
+                kTho = False
+            EndIf
+            if cSrc[k] == "GENITAL" || cMouth[k]
+                kPer = False
+                kTho = False
+            EndIf
+            if sustain && k == sustainK
+                kInt = False
+                kPer = False
+                kTho = False
+            EndIf
+            Int rank = 3
+            if kPer
+                rank = 1
+            ElseIf kTho
+                rank = 2
+            ElseIf kInt
+                rank = 4
+            EndIf
+            if rank > bestRank
+                bestRank = rank
+                d = k
+            EndIf
+        EndIf
+        k += 1
+    EndWhile
+    Bool interrupting = (bestRank == 4)
+    Bool asThought    = (bestRank == 2)
+    Bool asPersistent = (bestRank == 1)
+    ; An escalation passes the clocks whoever decides the tier (verify 2026-09-13: a fresh escalated clause was held
+    ; back with a louder clause that was on its clock). Only clause 0 can carry it.
+    Bool escLine = cEsc[0] && cReady[0]
+    Bool susD    = sustain && d == sustainK
+
+    ; ★ The kiss trail passes the clocks once: a FRESH READY mouth clause OFF HER FACE (lips -> neck), on the NPC the
+    ; kiss mute last dropped a mouth clause from. A mouth still on her face after the mute is the flicker, not a trail.
+    Bool trail = False
+    if kissTrailActor == npc && !mouthMuted && Utility.GetCurrentRealTime() < kissTrailUntil
+        k = 0
+        while k < 4
+            if cUse[k] && cMouth[k] && cFresh[k] && cReady[k] \
+            && !VRTouch_TriggerLib.V3IsFaceFamily(cKey[k]) && !VRTouch_TriggerLib.V3IsMouthKey(cKey[k])
+                trail = True
+            EndIf
+            k += 1
+        EndWhile
     EndIf
-    ; ★ THE ARMOR FLOOR for a genital-source contact (user, 2026-08-23): armor
-    ; mutes a hand, it does not make someone pressing their genitals against you
-    ; unremarkable. So these never fall to the quiet tiers, whatever she wears —
-    ; they always at least SPEAK. (They still never force an INTERRUPT: that
-    ; stays reserved for the intimate ladder and bare intimate contact.)
-    if isGenSrc
-        asPersistent = False
-        asThought    = False
+
+    ; ★ ONE LINE, NOT TWO (verify 2026-09-13; ruling A): contacts that begin together but have different dwells used to
+    ; split into two lines, the second one then held by the clock the first had just stamped. When another FRESH clause
+    ; will reach its dwell by the next update (~1 s), wait for it and send both at once. Never for an interrupt, an
+    ; escalation, a sustain upgrade or the kiss trail - those go now.
+    ; ⚠ BOUNDED (final verify 2026-09-13): at most ONE wait per NPC per 1.5 s, one NPC waiting at a time, and a Papyrus
+    ;   deadline (WaitTick, 1.2 s) or her session End re-sends the held line if no update came - a ready line is never lost
+    ;   and never stalled behind a contact whose clock keeps restarting.
+    Float nowW = Utility.GetCurrentRealTime()
+    Bool mayWait = !noWait && (waitActor == None || (waitActor == npc && nowW - waitAt >= 1.5))
+    if mayWait && bestRank < 4 && !escLine && !susD && !trail
+        Bool soon = False
+        k = 0
+        while k < 4
+            if cUse[k] && cFresh[k] && !cReady[k] && (cDelay[k] - cDur[k]) <= 1.05
+                soon = True
+            EndIf
+            k += 1
+        EndWhile
+        if soon
+            waitActor  = npc
+            waitF      = f
+            waitArgDur = dur
+            waitAt     = nowW
+            V3PendAdd(npc)
+            VTLog("[V3] WAIT one update so " + cKey[d] + " and a contact about to ripen go out as one line on " + npcName)
+            ScheduleNextUpdate()
+            return
+        EndIf
     EndIf
 
     ; ================================================================
     ; THE GATE — two clocks, and thoughts are exempt entirely.
     ; ================================================================
-    ; "Though" rows are NEVER gated by us.  A thought is unvoiced and
-    ; internal, so it cannot talk over anything and does not need pacing
-    ; from this side — and SkyrimNet already throttles them itself
-    ; (config/NpcThoughts.yaml, perNPCCooldownSeconds: 60).  Gating them
-    ; here just meant a touch could be swallowed twice over.
-    ;
-    ; Speak rows consult the NORMAL clock.
-    ; Speak (Interrupt) rows consult the INTIMATE clock ONLY — they cut
-    ; through an ordinary reaction, but never through their own, so
-    ; hammering one breast cannot outrun the LLM's ability to answer.
-    ;
-    ; ★ ESCALATIONS BYPASS EVERY CLOCK (report 16 §16.3 #4: "deeper-than-
-    ; last-fired bypasses the tract cooldown — escalation is new
-    ; information; same-or-shallower respects the cooldown").
-    ; Observed 2026-08-08 11:00:21 before this carve-out existed: the
-    ; opening fired, then `SUPPRESSED (intimate cooldown): uterus` one
-    ; second later — the anti-spam rule had swallowed the ladder, and
-    ; going from brushing the entrance to reaching the womb went unsaid.
-    ;
-    ; This is NOT a spam hole, and the reason is structural rather than a
-    ; tuning judgement: the C++ bridge sets ESC only when the sub-region
-    ; priority STRICTLY EXCEEDS the last one emitted in that session, and
-    ; priority is capped (uterus 100). So a session can escalate at most a
-    ; few times, only ever upward, and never twice at the same depth.
-    ; Repeating the same contact re-emits with esc=0 and is gated normally,
-    ; and a NEW session starts at emittedPriority -1 so its first emit is
-    ; never an escalation.
-    if !asThought && !esc && V3IsOnCooldown(npc, interrupting)
-        v3nCooldown += 1
-        String cdWhich = "normal"
-        if interrupting
-            cdWhich = "intimate"
+    ; "Though" rows are NEVER gated by us (unvoiced; SkyrimNet throttles them itself, 60s per NPC).
+    ; Speak rows consult the NORMAL clock. Speak (Interrupt) rows consult the INTIMATE clock ONLY - they
+    ; cut through an ordinary reaction, but never through their own.
+    ; ★ ESCALATIONS BYPASS EVERY CLOCK (report 16 §16.3 #4): the bridge sends ESC "1" only when a lane's
+    ; priority STRICTLY rises above its own last named value, capped (uterus 100) - a few times per session at
+    ; most. A lane JOIN (ESC "2") is new information but NOT an escalation: it passes no clock.
+    ; ★ A sustain upgrade bypasses the clock too (its own quiet fire stamped it 2-6s ago).
+    ; ★ 2026-09-13: a line held back by the clock keeps her PENDING - a fresh contact is re-tested once the clock
+    ;   runs out instead of being lost for the rest of the session (review: a kiss joining a hand was lost).
+    if !asThought && !escLine && !susD && !trail && V3IsOnCooldown(npc, interrupting)
+        V3PendAdd(npc)
+        ; Counted and logged once per contact, not once per retry second (verify 2026-09-13).
+        if !fromUpdate
+            v3nCooldown += 1
+            String cdWhich = "normal"
+            if interrupting
+                cdWhich = "intimate"
+            EndIf
+            VTLog("[V3] SUPPRESSED (" + cdWhich + " cooldown, re-tested on each update until it runs out): " + cKey[d] + " on " + npcName)
         EndIf
-        VTLog("[V3] SUPPRESSED (" + cdWhich + " cooldown): " + key + " on " + npc.GetDisplayName())
         return
     EndIf
 
-    ; --- Compose ---
-    String narr = ""
-    if key == "male_genitals"
-        ; ★ Dedicated composer: carries erection state (PPB GENBEND level via
-        ; the native; -1 until PPB exports it -> clause omitted) and the
-        ; position along the shaft (from the chord name).
-        narr = VRTouch_TriggerLib.V3MaleGenNarration(npc.GetDisplayName(), \
-            playerRef.GetDisplayName(), part1, w1, src1, name1, dist1, \
-            VRTouchEvents_Native.GetErectionLevel(npc), arm, clothName, dur)
-    Else
-        narr = VRTouch_TriggerLib.V3Narration(npc.GetDisplayName(), playerRef.GetDisplayName(), \
-            sub1, part1, w1, src1, name1, dist1, dep1, \
-            sub2, part2, w2, src2, name2, dist2, dep2, dur)
-    EndIf
+    ; --- Compose: the named clauses, in the bridge's order ---
+    Int erect = -1
     String privStr = "0"
-    if VRTouch_TriggerLib.V3IsPrivate(key, arm)
-        privStr = "1"
-    EndIf
-    ; V3EffectiveDepth, not dep1 raw — the under-jaw capsule reports depth 2
-    ; from OUTSIDE the head, and this field is what the schema's `intensity`
-    ; shows the LLM.  Must match the verb inside V3Narration.
-    String intensity = VRTouch_TriggerLib.V3IntensityVerb(dist1, \
-        VRTouch_TriggerLib.V3EffectiveDepth(sub1, dep1))
-
-    ; --- Shadow mode: log-only while V3LogOnly is set ---
-    ; The cooldown is still recorded so the log models live pacing.
-    ; (Gate is V3LogOnly, not !V3Live — see the property block: V3Live
-    ;  is an Auto Property whose value lives in the save, so it could
-    ;  never be flipped for an existing game.)
-    if V3LogOnly
-        String mode = "SPEAK"
-        if asThought
-            mode = "THOUGHT"
-        ElseIf asPersistent
-            mode = "PERSISTENT"
+    Int arK = d
+    Float arBest = -1.0
+    Int firedBits = 0
+    Bool[] cNamed = new Bool[4]
+    Int named = 0
+    k = 0
+    while k < 4
+        ; ★ A mouth or genital contact is ALWAYS a direct narration (ruling D): already-voiced ones are not repeated as
+        ; context inside a THOUGHT or a PERSISTENT line (verify 2026-09-13).
+        Bool quietSkip = bestRank < 3 && !cFresh[k] && (cMouth[k] || cSrc[k] == "GENITAL")
+        if cUse[k] && cName2[k] && !quietSkip
+            cNamed[k] = True
+            named += 1
+            if cFresh[k] && cReady[k]
+                firedBits = Math.LogicalOr(firedBits, V3LaneBit(cW[k]))
+                ; Arousal is judged on what is NEW in this line, not on an old kiss named again as context.
+                Float ab = VRTouch_TriggerLib.V3GetArousal(cKey[k], cGrab[k], cArm[k])
+                if ab > arBest
+                    arBest = ab
+                    arK = k
+                EndIf
+            EndIf
+            if cKey[k] == "male_genitals"
+                ; carries erection state (PPB GENBEND via the native; -1 = unknown -> clause omitted)
+                erect = VRTouchEvents_Native.GetErectionLevel(npc)
+            EndIf
+            if VRTouch_TriggerLib.V3IsPrivate(cKey[k], cArm[k]) || cMouth[k]
+                privStr = "1"
+            EndIf
         EndIf
-        VTLog("[V3] WOULD FIRE (" + mode + ") key=" + key + " arm=" + arm + " esc=" + f[15] + " priv=" + privStr \
-            + " | " + w1 + "/" + src1 + " part=" + part1 + " sub=" + sub1 + " dep=" + dep1 + " dist=" + f[6] + " dur=" + dur \
-            + " | second=" + w2 + "/" + src2 + "/" + part2 \
-            + " | skel=" + f[14] + " cloth=" + clothName + " intensity=" + intensity \
+        k += 1
+    EndWhile
+    String narr = VRTouch_TriggerLib.V3NarrationMulti(npcName, playerRef.GetDisplayName(), \
+        cW, cSrc, cName, cPart, cSub, cDep, cDist, cKey, cArm, cCloth, cNamed, erect, d, cDur[d])
+    ; V3EffectiveDepth, not the raw depth — must match the verb inside the narration.
+    String intensity = VRTouch_TriggerLib.V3IntensityVerb(cDist[d], \
+        VRTouch_TriggerLib.V3EffectiveDepth(cSub[d], cDep[d]))
+    ; Every fresh clause that went out is voiced from here on. RE-READ the ring and merge (verify 2026-09-13): this
+    ; dispatch yielded on natives, and another one for her may have voiced a lane in the meantime.
+    V3VoicedSet(npc, Math.LogicalOr(V3VoicedGet(npc), firedBits))
+    if waitActor == npc
+        waitActor = None   ; the line this NPC was waiting to combine went out
+    EndIf
+    if trail
+        kissTrailActor = None
+    EndIf
+
+    ; --- Shadow mode: log-only while V3LogOnly is set (the cooldown is still recorded) ---
+    if V3LogOnly
+        String lmode = "SPEAK"
+        if asThought
+            lmode = "THOUGHT"
+        ElseIf asPersistent
+            lmode = "PERSISTENT"
+        EndIf
+        VTLog("[V3] WOULD FIRE (" + lmode + ") key=" + cKey[d] + " arm=" + cArm[d] + " esc=" + f[0] + " priv=" + privStr \
+            + " | " + cW[d] + "/" + cSrc[d] + " part=" + cPart[d] + " sub=" + cSub[d] + " dep=" + cDep[d] + " dist=" + cDist[d] \
+            + " dur=" + cDur[d] + " | named=" + named + " skel=" + f[1] + " cloth=" + cCloth[d] + " intensity=" + intensity \
             + " | " + narr)
-        ; Shadow mode models live pacing, including which clock would be
-        ; stamped — a thought stamps neither (see the live branches).
         if !asThought
             V3RecordFire(npc, interrupting)
         EndIf
@@ -2868,109 +5136,91 @@ Function V3Dispatch(Actor npc, String[] f, Float dur, Bool fromUpdate)
     EndIf
 
     ; ================================================================
-    ; --- LIVE dispatch — THE THREE TIERS OF THE SCHEMA SHEET ---
+    ; --- LIVE dispatch — the four delivery tiers ---
     ; ================================================================
-    ; `VRTouchEvents Triggers Shema.xlsx`, column "Though/Speak", is the
-    ; specification.  Each of its three values is a DIFFERENT SkyrimNet
-    ; delivery mechanism, and they must not be confused:
-    ;
-    ;   Though (34 rows)  -> GenerateNPCThought.  Unvoiced.  The NPC just
-    ;                        notices; it colours their later lines.
-    ;   Speak  (38 rows)  -> DirectNarration.  They talk about it when
-    ;                        nothing else is happening.
-    ;   Speak (Interrupt) -> DirectNarration, preceded by cutting whatever
-    ;         (30 rows)      they are currently saying, so a hand on a bare
-    ;                        breast is acknowledged NOW, not eventually.
-    ;
-    ; ★ WHY THIS IS A DIRECT CALL AND NOT A TRIGGER (2026-08-08)
-    ; Speak used to be delivered by registering a `vrtouch_contact` event and
-    ; letting the trigger YAML answer it with `response: direct_narration`.
-    ; That is the same end result by a longer road, and the road closed:
-    ; SkyrimNet's TriggerManager stopped evaluating events on this load order.
-    ; Measured 2026-08-08 — 30 triggers loaded from several mods, an event
-    ; type index built, the processing loop started, and then ZERO events
-    ; evaluated in 45 minutes.  Our own event registered fine
-    ; (`SceneContextBuilder: Processed event 'vrtouch_contact'`) and simply
-    ; never reached a trigger.
-    ;
-    ; The tell was that Though kept working while both Speak tiers went
-    ; silent: GenerateNPCThought is a direct API call, and so is the choke's
-    ; DirectNarration — which is exactly why chokes still reacted when
-    ; touches did not.  Calling DirectNarration here restores the sheet's
-    ; behaviour and makes all three tiers independent of TriggerManager.
-    ;
-    ; The audience split is native to the API and replaces what the two
-    ; pass-through YAMLs were emulating:
-    ;   targetActor = the player -> she answers the player  (private)
-    ;   targetActor = None       -> she addresses everyone nearby (public)
+    ; Each is a DIRECT SkyrimNet call (TriggerManager stopped evaluating events on this load order,
+    ; 2026-08-08). Audience = DirectNarration's targetActor: the player -> private, None -> public.
     if asPersistent
-        ; --- PERSISTENT (the fourth tier, 2026-08-23): context, no reaction.
-        ; RegisterPersistentEvent is a DIRECT API call (not trigger-evaluated
-        ; — TriggerManager is still dead on this load order, re-verified
-        ; 2026-08-23), lands in the NPC's own event history, and SkyrimNet
-        ; disables dialogue reactions on it by default.  It has NO SkyrimNet-
-        ; side throttle and the prompt only renders ~35 events
-        ; (NpcThoughts.yaml eventHistoryCount), so it consults AND stamps
-        ; the NORMAL clock like a Speak — armored contact spam must not
-        ; evict her real context.
+        ; PERSISTENT: context, no reaction. No SkyrimNet-side throttle and a finite rendered history, so it
+        ; consults AND stamps the NORMAL clock like a Speak.
         v3nPersistent += 1
         SkyrimNetApi.RegisterPersistentEvent(narr, npc, playerRef)
         V3RecordFire(npc, False)
-        VTLog("[V3] PERSISTENT key=" + key + " arm=" + arm + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
+        V3SusArm(npc, cKey[d], cDelay[d], cW[d], cDur[d])   ; ...and watch the hold: if it lasts, it speaks up
+        VTLog("[V3] PERSISTENT key=" + cKey[d] + " arm=" + cArm[d] + " part='" + cPart[d] + "' named=" + named + " on " + npcName + " | " + narr)
     ElseIf asThought
-        ; ★ A thought stamps NEITHER clock.  It is transparent to the
-        ; cooldown system in both directions: it is not gated by it (above)
-        ; and it does not consume anyone else's turn.  It is unvoiced and
-        ; internal, so it cannot talk over a Speak — and SkyrimNet's own
-        ; 60s per-NPC thought throttle already paces it.  Letting a thought
-        ; block a later Speak would mean brushing an arm silences a grope.
+        ; A thought stamps NEITHER clock: brushing an arm must never silence a grope.
         v3nThought += 1
         SkyrimNetApi.GenerateNPCThought(npc, narr)
-        VTLog("[V3] THOUGHT key=" + key + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
+        V3SusArm(npc, cKey[d], cDelay[d], cW[d], cDur[d])
+        VTLog("[V3] THOUGHT key=" + cKey[d] + " part='" + cPart[d] + "' named=" + named + " on " + npcName + " | " + narr)
     Else
-        ; --- SPEAK (INTERRUPT): cut the line she is saying right now. ---
-        ; TriggerInterruptDialogue is the non-blocking twin of PurgeDialogue
-        ; (StartChoke uses the pair for the same purpose).  `false` = also
-        ; interrupt audio mid-playback rather than letting it finish, which
-        ; is the whole point of the tier.
-        ; ⚠ It is GLOBAL — it clears every actor's queue, not just hers.
-        ; SkyrimNet has no per-actor speech-stop, so a second NPC talking
-        ; nearby also gets cut.  Accepted: this only runs for the 30 sheet
-        ; rows marked "Speak (Interrupt)", all of them intimate contact.
+        ; SPEAK (INTERRUPT): cut the line she is saying right now - ONLY when she is the one talking (V3CutIfTalking,
+        ; 2026-09-15: the finger in her mouth, a bare breast grab... never cut somebody else's line).
         String mode = "SPEAK"
         if interrupting
-            SkyrimNetApi.TriggerInterruptDialogue(false)
-            mode = "SPEAK-INTERRUPT"
+            if V3CutIfTalking(npc, "touch '" + cKey[d] + "'")
+                mode = "SPEAK-INTERRUPT"
+            Else
+                mode = "SPEAK-INTERRUPT-TIER (not talking, nothing cut)"
+            EndIf
         EndIf
-
-        ; --- SPEAK: force the reaction. ---
-        ; Private -> she answers the player directly.  Public -> she
-        ; addresses everyone nearby.  Both are DirectNarration's own
-        ; targetActor semantics; no trigger, no YAML, no event matching.
+        if susD
+            mode = "SPEAK-SUSTAIN"
+            v3nSustain += 1
+            Debug.Trace("[V3] SUSTAIN FIRED key=" + cKey[d] + " dur=" + cDur[d] + " priv=" + privStr + " on " + npcName + " | " + narr)
+        EndIf
         if privStr == "1"
             SkyrimNetApi.DirectNarration(narr, npc, playerRef)
         Else
             SkyrimNetApi.DirectNarration(narr, npc, None)
         EndIf
-
         v3nSpoken += 1
-        ; An interrupt stamps BOTH clocks; an ordinary Speak stamps only the
-        ; normal one, so intimate contact can still cut in immediately.
+        ; An interrupt stamps BOTH clocks; an ordinary Speak stamps only the normal one.
         V3RecordFire(npc, interrupting)
-        ; part1 is logged RAW (exactly as PPB sent it) beside the finished
-        ; narration.  That one pairing is what makes a casing or naming bug
-        ; diagnosable from the user log alone, without cross-referencing the
-        ; SKSE bridge log — which truncates on every launch.
-        VTLog("[V3] " + mode + " key=" + key + " esc=" + f[15] + " priv=" + privStr \
-            + " part='" + part1 + "' on " + npc.GetDisplayName() + " | " + narr)
+        ; part logged RAW beside the finished narration: a casing or naming bug stays diagnosable.
+        VTLog("[V3] " + mode + " key=" + cKey[d] + " esc=" + f[0] + " priv=" + privStr \
+            + " part='" + cPart[d] + "' named=" + named + " on " + npcName + " | " + narr)
+    EndIf
+    if trail
+        Debug.Trace("[V3] KISS TRAIL narrated on " + npcName + " | " + narr)
     EndIf
     V3ReportMaybe()
 
-    ; Optional arousal — reuse the existing pipeline (gates, cooldown, LLM)
-    ; with the V3 report-14 baseline for the resolved key; the V2-mapped key
-    ; keeps the vocabulary the arousal prompt/logs already know.
-    MaybeArousal(npc, VRTouch_TriggerLib.V3ArousalKey(key), isGrab, arm, narr, \
-        VRTouch_TriggerLib.V3GetArousal(key, isGrab, arm))
+    ; Optional arousal — the existing pipeline, from the named clause with the highest baseline.
+    MaybeArousal(npc, VRTouch_TriggerLib.V3ArousalKey(cKey[arK]), cGrab[arK], cArm[arK], narr, \
+        VRTouch_TriggerLib.V3GetArousal(cKey[arK], cGrab[arK], cArm[arK]))
+EndFunction
+
+; ================================================================
+; ★ THE PLUGGED-ORIFICE GATE (user, 2026-08-26), now a helper so each clause can ask it (2026-09-13).
+; ================================================================
+; "if a plug is installed, disable that orifice VRTE reaction for insertion ... it's the used mechanism to
+; removing the plug anyway, so the removal will be the events firing." The orifice is physically occupied,
+; so an interior verdict there is the extraction gesture or a detection artefact - never a penetration.
+; ⚠ TESTED BY SLOT, NOT BY NAME: 57 = vaginal, 48 = anal (DD's own map, zadLibs.psc:665/679), and DD's double
+;   plugs occupy both. ⚠ It deliberately does NOT touch V3SlotChain (that would hand every plugged-orifice
+;   contact to V3PlausibilityDrop, including the removal gesture).
+; ⛔ SLOT ALONE IS NOT ENOUGH (2026-08-26): `aaaDDShoulder` (Dark Dreams.esl) sits on 57. The slot says the
+;   orifice is OCCUPIED; the keyword says by a PLUG. Both, or no gate. Fails SAFE on a keywordless plug.
+Bool Function V3PlugGated(Actor npc, String key)
+    String plugSite = VRTouch_TriggerLib.V3PlugSiteOfKey(key)
+    if plugSite == ""
+        return False
+    EndIf
+    Int plugMask = 262144                        ; slot 48 - anal
+    Keyword siteKw = kwPlugAnal
+    if plugSite == "vaginal"
+        plugMask = 134217728                     ; slot 57 - vaginal
+        siteKw   = kwPlugVaginal
+    EndIf
+    Bool wornIsPlug = False
+    if siteKw != None && npc.WornHasKeyword(siteKw)
+        wornIsPlug = True
+    ElseIf kwPlugAny != None && npc.WornHasKeyword(kwPlugAny)
+        wornIsPlug = True
+    EndIf
+    return wornIsPlug && npc.GetWornForm(plugMask) != None
 EndFunction
 
 ; ================================================================
@@ -2999,6 +5249,12 @@ Function V3ReportReset()
     v3nGrabGate     = 0
     v3nCombatHit    = 0
     v3nChokeArm     = 0
+    v3nPlugGate     = 0
+    v3nPlugOut      = 0
+    v3nAftermath    = 0
+    v3nPlugIn       = 0
+    v3nMenuOn       = 0
+    v3nMenuOff      = 0
     v3ReportAt      = 0.0
 EndFunction
 
@@ -3014,11 +5270,13 @@ Function V3ReportMaybe()
         + " implausible=" + v3nPlausibility \
         + " | suppressed: cooldown=" + v3nCooldown + " scene=" + v3nSceneGate \
         + " chokegag=" + v3nChokeGag + " grabgate=" + v3nGrabGate \
-        + " combathit=" + v3nCombatHit \
-        + " | persistent=" + v3nPersistent + " genSource=" + v3nGenSource         + " hoverDrop=" + v3nHoverDrop \
+        + " combathit=" + v3nCombatHit + " plugged=" + v3nPlugGate + " plugOut=" + v3nPlugOut + " after=" + v3nAftermath + " plugIn=" + v3nPlugIn + " menuOn=" + v3nMenuOn + " menuOff=" + v3nMenuOff \
+        + " | persistent=" + v3nPersistent + " sustain=" + v3nSustain + " genSource=" + v3nGenSource + " mouthSource=" + v3nMouthSource + " hoverDrop=" + v3nHoverDrop \
         + " | undress: arm=" + v3nUndressArm + " gate=" + v3nUndressGate + " fire=" + v3nUndressFire \
         + " masturbation=" + v3nMasturbation + " device=" + v3nDevice \
-        + " gear=" + v3nGearEquip \
+        + " gear=" + v3nGearEquip + " gearOff=" + v3nGearOff + " naked=" + v3nGearNaked + " offCd=" + v3nGearOffCd \
+        + " offStayed=" + v3nGearStayed + " heldArmour=" + v3nGearHeld + " refused=" + v3nGearRefused \
+        + " fx=" + v3nDeviceEffect \
         + " | chokesArmed=" + v3nChokeArm)
 EndFunction
 
@@ -3063,22 +5321,27 @@ Function V3ChokeStamp(Actor npc, String[] f)
     if !chokeActive || npc != chokeActor
         return
     EndIf
-    if f[1] == "GRAB" || f[8] == "GRAB"
+    ; ★ 2026-09-13: any of the four clauses (SRC at 4 / 12 / 20 / 28 - see V3Split35).
+    if f[4] == "GRAB" || f[12] == "GRAB" || f[20] == "GRAB" || f[28] == "GRAB"
         chokeLastContact = Utility.GetCurrentRealTime()
     EndIf
 EndFunction
 
-; Split the 16-field VRTE strArg on '|'.  Base-SKSE StringUtil only
+; Split the 35-field VRTE strArg on '|'.  Base-SKSE StringUtil only
 ; (no PapyrusUtil Split dependency at compile time).  Missing tail
-; fields stay "" — new String[16] elements default to empty.
+; fields stay "" — new String[35] elements default to empty.
 ; NOTE: Substring(s, start, 0) means "to end of string", so empty
 ; fields (p == start) must be skipped explicitly, not sliced.
-String[] Function V3Split16(String s)
-    String[] out = new String[16]
+; ★★ 2026-09-13 LAYOUT (VRTouchEvents.dll PpbBridge.cpp — change BOTH together):
+;   0 ESC ("1" escalation · "2" a source lane joined) · 1 SKEL · 2 N clauses
+;   then 4 clauses of 8 fields at 3 / 11 / 19 / 27: W SRC NAME PART SUB DEP DIST DUR (unused = "")
+; ⛔ StringUtil.Split would DROP empty fields and shift every column (the 2026-08-30 "536870912" bug).
+String[] Function V3Split35(String s)
+    String[] out = new String[35]
     Int idx = 0
     Int start = 0
     Int slen = StringUtil.GetLength(s)
-    while idx < 15
+    while idx < 34
         Int p = StringUtil.Find(s, "|", start)
         if p < 0
             ; Malformed / short payload — dump the remainder into the
@@ -3095,7 +5358,7 @@ String[] Function V3Split16(String s)
         idx += 1
     EndWhile
     if start < slen
-        out[15] = StringUtil.Substring(s, start)
+        out[34] = StringUtil.Substring(s, start)
     EndIf
     return out
 EndFunction
@@ -3143,6 +5406,235 @@ Function V3PendClear(Actor a)
     EndIf
 EndFunction
 
+; ================================================================
+; ★ THE SUSTAIN RING (2026-09-12) - the user's two-fire design
+; ================================================================
+; "The gate becomes an entry for the event." A contact that fires QUIETLY - PERSISTENT
+; (context, no reaction) or THOUGHT (unvoiced) - is remembered with an upgrade point of
+; TWICE its dwell, capped at 6 seconds:
+;     1s-gated -> speaks at a 2s hold    2s-gated -> 4s    3s or longer -> 6s
+; If the same hold is still on the same body part when the session reaches that point, it
+; fires ONCE more as a plain DirectNarration carrying the REAL duration, and clears.
+;
+; WHY: a fleeting brush and a hand left resting were indistinguishable. Both went out as one
+; quiet event, and the "held for N seconds" in the text was frozen at the moment it fired.
+;
+; ⚠ Measured on the SESSION duration (numArg) - the same clock the dwell uses - so the points
+;   mean "total hold", exactly as the user stated them.
+; ★ BOTH quiet tiers arm it (the user, 2026-09-12: "the fire will work on a clothed NPC
+;   too, same rule as armor"). Clothed and bare contacts mostly go out as THOUGHTS, and a
+;   hand resting on a clothed arm is exactly the fleeting-vs-resting case this exists for.
+;   ⚠ That includes the bare THOUGHT rows (arms, hands, feet) - same tier, same rule.
+
+Int Function V3SusFind(Actor a)
+    if a == None || v3SusActor.Length < 16
+        return -1
+    EndIf
+    Int i = 0
+    while i < 16
+        if v3SusActor[i] == a
+            return i
+        EndIf
+        i += 1
+    EndWhile
+    return -1
+EndFunction
+
+Function V3SusArm(Actor a, String key, Float delay, String laneW = "", Float firedDur = 0.0)
+    ; FOMOD "Subtle contact": the sustain upgrade never arms, so a hold that went out
+    ; quietly stays quiet and every contact keeps the tier the matrix gives it.
+    if !VRTouch_SustainGate.IsEnabled()
+        return
+    EndIf
+    if a == None || v3SusActor.Length < 16
+        return
+    EndIf
+    if v3SusW.Length < 16
+        v3SusW = new String[16]
+    EndIf
+    Float upAt = delay * 2.0
+    if upAt > 6.0
+        upAt = 6.0
+    EndIf
+    ; ★ A quiet fire that went out LATE (it waited on the clock - the retry) keeps the same gap to its upgrade,
+    ; measured from when it actually fired (verify 2026-09-13: it used to upgrade on the very next update).
+    if firedDur > delay && firedDur + (upAt - delay) > upAt
+        upAt = firedDur + (upAt - delay)
+    EndIf
+    Int idx = V3SusFind(a)
+    if idx < 0
+        idx = 0
+        Bool placed = False
+        while idx < 16 && !placed
+            if v3SusActor[idx] == None
+                placed = True
+            Else
+                idx += 1
+            EndIf
+        EndWhile
+        if !placed
+            idx = 0   ; full - 16 NPCs held at once is unrealistic; steal slot 0
+        EndIf
+    EndIf
+    v3SusActor[idx] = a
+    v3SusKey[idx]   = key
+    v3SusAt[idx]    = upAt
+    v3SusW[idx]     = laneW
+    Debug.Trace("[V3] SUSTAIN armed key=" + key + " dwell=" + delay + " -> speaks at " + upAt + "s on " + a.GetDisplayName())
+EndFunction
+
+Function V3SusClear(Actor a)
+    Int idx = V3SusFind(a)
+    if idx >= 0
+        v3SusActor[idx] = None
+        v3SusKey[idx]   = ""
+    EndIf
+EndFunction
+
+; ★ THE ONE-LINE WAIT's deadline (2026-09-13): if no update for the waiting NPC fired her line within 1.2 s, send it now.
+Function WaitTick(Float now)
+    if waitActor == None || now < waitAt + 1.2
+        return
+    EndIf
+    Actor a = waitActor
+    String[] wf = waitF
+    Float wd = waitArgDur
+    waitActor = None
+    if a != None && !a.IsDead() && wf.Length > 0
+        Debug.Trace("[V3] WAIT deadline - sending the held line on " + a.GetDisplayName())
+        V3Dispatch(a, wf, wd, True, False, -1, True)
+    EndIf
+EndFunction
+
+Float Function WaitWait(Float now)
+    if waitActor == None
+        return 999999.0
+    EndIf
+    Float w = (waitAt + 1.2) - now
+    if w < 0.05
+        w = 0.05
+    EndIf
+    return w
+EndFunction
+
+; ★ THE VOICED-LANES RING (2026-09-13) - see its declaration. Bit per lane letter: R 1 · L 2 · H 4 · G 8.
+Int Function V3LaneBit(String w)
+    if w == "R"
+        return 1
+    ElseIf w == "L"
+        return 2
+    ElseIf w == "H"
+        return 4
+    ElseIf w == "G"
+        return 8
+    EndIf
+    return 0
+EndFunction
+
+Int Function V3VoicedGet(Actor a)
+    if a == None || v3VoicedActor.Length < 16
+        return 0
+    EndIf
+    Int i = v3VoicedActor.Find(a)
+    if i < 0
+        return 0
+    EndIf
+    return v3VoicedMask[i]
+EndFunction
+
+Function V3VoicedSet(Actor a, Int mask)
+    if a == None
+        return
+    EndIf
+    if v3VoicedActor.Length < 16 || v3VoicedAt.Length < 16
+        v3VoicedActor = new Actor[16]
+        v3VoicedMask  = new Int[16]
+        v3VoicedAt    = new Float[16]
+    EndIf
+    Float now = Utility.GetCurrentRealTime()
+    Int i = v3VoicedActor.Find(a)
+    if i < 0
+        if mask == 0
+            return
+        EndIf
+        i = v3VoicedActor.Find(None)
+        if i < 0
+            ; Full: a session dropped silently (door, loading screen, scene) never sends an End, so its entry lingers -
+            ; take the OLDEST entry rather than always slot 0 (verify 2026-09-13).
+            i = 0
+            Int j = 1
+            while j < 16
+                if v3VoicedAt[j] < v3VoicedAt[i]
+                    i = j
+                EndIf
+                j += 1
+            EndWhile
+        EndIf
+        v3VoicedActor[i] = a
+    EndIf
+    v3VoicedMask[i] = mask
+    v3VoicedAt[i]   = now
+    if mask == 0
+        v3VoicedActor[i] = None
+    EndIf
+EndFunction
+
+; Called from OnVRTEContactUpdate for an armed actor. Consumes the entry the moment the hold
+; reaches its point, whatever the checks below decide - at most ONE upgrade per hold.
+Function V3SusCheck(Actor npc, String strArg, Float dur)
+    Int idx = V3SusFind(npc)
+    if idx < 0
+        return
+    EndIf
+    String susKey = v3SusKey[idx]
+    Float  susAt  = v3SusAt[idx]
+    String susW   = ""
+    if v3SusW.Length >= 16
+        susW = v3SusW[idx]
+    EndIf
+    String[] f = V3Split35(strArg)
+    ; ★ 2026-09-13: the point is measured on the HELD clause's own clock (its lane DUR), not the session's -
+    ; a hand that joined a long session would otherwise pass its point on the very next update (review).
+    ; Re-resolve the part that lane is on NOW. A hand that slid from her arm to her hip must never be narrated
+    ; as still resting on the arm, and a different hand on the same part is not the same hold.
+    Int isMale = 0
+    ActorBase npcBase = npc.GetLeveledActorBase()
+    if npcBase && npcBase.GetSex() == 0
+        isMale = 1
+    EndIf
+    Int heldK = -1
+    String nowKey = ""
+    Int k = 0
+    while k < 4 && heldK < 0
+        Int b = 3 + k * 8
+        if f[b + 1] != "" && (susW == "" || f[b] == susW)
+            String laneKey = VRTouch_TriggerLib.V3MapKey(f[b + 4], f[b + 3], isMale)
+            if nowKey == ""
+                nowKey = laneKey
+            EndIf
+            if laneKey == susKey
+                heldK = k
+            EndIf
+        EndIf
+        k += 1
+    EndWhile
+    if heldK < 0
+        V3SusClear(npc)
+        Debug.Trace("[V3] SUSTAIN dropped - the " + susW + " hold moved from " + susKey + " to '" + nowKey + "' by " + dur + "s on " + npc.GetDisplayName())
+        return
+    EndIf
+    Float heldDur = f[3 + heldK * 8 + 7] as Float
+    if heldDur < susAt
+        return    ; still a hold, not yet a long one
+    EndIf
+    V3SusClear(npc)
+    Debug.Trace("[V3] SUSTAIN point reached key=" + susKey + " at " + dur + "s (point " + susAt + "s) on " + npc.GetDisplayName())
+    ; The FULL pipeline, so the upgrade is composed, gated (scene, choke, grab, plug...) and
+    ; addressed exactly like any other contact - forced to plain Speak, past the dwell wait
+    ; and past the cooldown.
+    V3Dispatch(npc, f, dur, True, True, heldK)
+EndFunction
+
 ; V3 per-NPC cooldown ring — same semantics as IsOnNpcCooldown /
 ; RecordCdFire but on V3's OWN arrays, so the shadow run never
 ; disturbs V2's pacing (and vice versa).  Escalations and
@@ -3164,7 +5656,9 @@ Bool Function V3IsOnCooldown(Actor a, Bool intimate = False)
             if intimate
                 stamp = v3CdIntimateTime[i]
             EndIf
-            return (Utility.GetCurrentRealTime() - stamp) < GlobalCooldown
+            ; Negative age = a stamp from an earlier game launch: expired (see Setup's arousal note).
+            Float cdAge = Utility.GetCurrentRealTime() - stamp
+            return cdAge >= 0.0 && cdAge < GlobalCooldown
         EndIf
         i += 1
     EndWhile
@@ -3224,4 +5718,64 @@ Function V3RecordFire(Actor a, Bool intimate = False)
     if intimate
         v3CdIntimateTime[oldestIdx] = now
     EndIf
+EndFunction
+
+; (DDZAftermath and OnDDZDeviceEffect - vibration, shock, climax, cast, trip -
+;  MOVED to the AddOn: VRTEDD_Controller.psc, 2026-08-29. The pronoun helpers
+;  below STAY - they are Global and the AddOn calls them.)
+
+; ═══ THE EQUIP-ACKNOWLEDGEMENT COOLDOWN (2026-08-30) ═══════════════════════
+; True at most once per GlobalCooldown REAL seconds per NPC (15 until 2026-09-13). Dressing someone is a BURST -
+; collar, cuffs, boots, belt inside a few seconds - and one spoken
+; acknowledgement for the burst is what was asked for. The rest still land as
+; persistent context, so nothing is lost from the LLM's picture of her; it just
+; is not spoken four times over.
+; ⚠ Its own 16-slot ring, mirroring v3CdActor's shape and reusing V3CdSlot's
+; find-or-claim idea, so the contact cooldowns are untouched.
+Actor[] v3DevNarrActor
+Float[] v3DevNarrAt
+
+Bool Function V3DevNarrReady(Actor a)
+    if a == None
+        return False
+    EndIf
+    if v3DevNarrActor.Length < 16
+        v3DevNarrActor = new Actor[16]
+        v3DevNarrAt    = new Float[16]
+    EndIf
+    Float now = Utility.GetCurrentRealTime()
+    Int i = 0
+    while i < 16
+        if v3DevNarrActor[i] == a
+            ; Negative age = a stamp from an earlier game launch: expired.
+            ; ★ 2026-09-13: GlobalCooldown (10 s) instead of a literal 15 - the user brought the cooldown to 10 s
+            ; ("15 can be really long") and ruled gear follows "the 10sec cooldown".
+            if (now - v3DevNarrAt[i]) >= 0.0 && (now - v3DevNarrAt[i]) < GlobalCooldown
+                return False
+            EndIf
+            v3DevNarrAt[i] = now
+            return True
+        EndIf
+        i += 1
+    EndWhile
+    ; not in the ring - claim a free slot, else the oldest
+    Int free = -1
+    Int oldest = 0
+    i = 0
+    while i < 16
+        if v3DevNarrActor[i] == None && free < 0
+            free = i
+        EndIf
+        if v3DevNarrAt[i] < v3DevNarrAt[oldest]
+            oldest = i
+        EndIf
+        i += 1
+    EndWhile
+    Int use = free
+    if use < 0
+        use = oldest
+    EndIf
+    v3DevNarrActor[use] = a
+    v3DevNarrAt[use]    = now
+    return True
 EndFunction

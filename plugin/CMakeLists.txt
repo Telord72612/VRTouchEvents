@@ -28,6 +28,9 @@ add_library(VRTouchEvents SHARED
     src/main.cpp
     src/CBPCHook.cpp
     src/PpbBridge.cpp
+    src/PromptState.cpp
+    src/SkyrimNetReplies.cpp
+    src/Speech.cpp
 )
 
 target_precompile_headers(VRTouchEvents PRIVATE src/PCH.h)

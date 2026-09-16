@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
+
+    <moduleName>VRTouchEvents V3.3</moduleName>
+
+    <installSteps order="Explicit">
+
+        <!-- ============================================================
+             STEP 1 - THE TOUCH SYSTEM.  This is the fork: the two builds
+             are different mods sharing a name.  Exactly one is installed.
+             ============================================================ -->
+        <installStep name="Touch System">
+            <optionalFileGroups order="Explicit">
+                <group name="Which system detects touch?" type="SelectExactlyOne">
+                    <plugins order="Explicit">
+
+                        <plugin name="PPB (V3.3) - current, recommended">
+                            <description>The current VRTouchEvents. Touch is sensed by Precision Physic Bodies (PPB), which puts real collision capsules on the body and reports exactly WHERE you touched, HOW (finger, palm, fist, grab, weapon, held object), HOW DEEP and FOR HOW LONG.
+
+WHAT ONLY THIS BUILD HAS
+- Precise body coverage: 100+ named capsules, both sexes, Argonian / Khajiit / Draenei skeletons.
+- Kissing - lips contact is its own reaction, and a kiss that slides from the lips to the neck is narrated as it travels.
+- Push, shove, stumble and leg sweep reactions.
+- Equip / unequip awareness: put gear on an NPC by hand, or pull it off, and she knows.
+- Devious Devices / ZaZ / Diary of Mine gear handled like any other gear (the DD SN Database adds the device-specific detail on top, if you have it).
+- Interrupts only cut the NPC who is actually speaking, so you never cut someone else off mid-sentence.
+- Depth-aware reactions and a full penetration ladder.
+- No trigger files: every line is written by the mod and sent straight to SkyrimNet.
+
+REQUIRES
+- SkyrimNet
+- Precision Physic Bodies (PPB) - the sensor; nothing works without it
+- HIGGS and VRIK - PPB's detection runs off a HIGGS frame callback and fails SILENTLY without it, even if you never grab anything
+- PLANCK - REQUIRED. VRTouchEvents is built on top of it; this is not an optional nicety.
+
+DOES NOT NEED CBPC. This build does not read CBPC collision at all and ships no CBPC configuration files.
+
+Pick this unless you specifically cannot run PPB.</description>
+                            <files>
+                                <folder source="PPB" destination="" />
+                            </files>
+                            <conditionFlags>
+                                <flag name="touchSystem">PPB</flag>
+                            </conditionFlags>
+                            <typeDescriptor><type name="Recommended" /></typeDescriptor>
+                        </plugin>
+
+                        <plugin name="CBPC (V2.1) - legacy">
+                            <description>The older VRTouchEvents, kept for players who cannot or do not want to run Precision Physic Bodies. Touch is sensed by CBPC collision spheres on skeleton nodes.
+
+HOW IT DIFFERS FROM THE PPB BUILD
+- Coarser detection. CBPC reports that a node was hit, not where on the body, how deep, or for how long, so reactions are less specific.
+- NO kissing, NO push / shove / leg sweep, NO equip or unequip awareness, NO Devious Devices gear handling. Those are all built on PPB data that does not exist here.
+- NO tail contact. Removed in this release: CBPC tail collision was unreliable (the tail bones whip too fast to hold contact) and is no longer supported.
+- NO back contact. Removed in this release: upper-back and lower-back touches depended on a correlation marker that is no longer supported, so a contact on the chest stays "chest" and one on the belly stays "belly".
+- Reactions are delivered through SkyrimNet trigger files rather than being written by the mod.
+
+SHARED REQUIREMENTS (same as the PPB build)
+- SkyrimNet
+- HIGGS and VRIK
+- PLANCK - REQUIRED. VRTouchEvents is built on top of it; this is not an optional nicety.
+- VRTouchEvents.esp must be ticked in your load order.
+
+EXTRA REQUIREMENTS THIS BUILD HAS AND THE PPB BUILD DOES NOT
+- CBPC (CB Physics for Papyrus Compatible) with collision enabled
+- A collision-enabled body - CBBE 3BA or equivalent
+- More haptics CBPC VR config (Nexus 40749). REQUIRED. Its CBPCollisionConfig additions are what provide FULL BODY collision detection; without them CBPC only reports BBP (breast/belly/butt) contact and most body parts never fire.
+- The CBPC collision configuration files shipped with this option. They must not be overwritten by another mod later in your load order, or detection stops.
+- A skeleton carrying the CME detection nodes. This option installs one; if you use SOFTBODY, also tick the SOFTBODY skeleton patch on the last page or its physics bones will be dropped.
+
+WARNING - SKELETON OVERRIDE
+This option installs skeleton meshes that will WIN over any other skeleton mod placed above it in your load order. If you use a custom skeleton, place VRTouchEvents ABOVE it and expect to lose the detection nodes, or ask for a patch built from your skeleton.
+
+Pick this ONLY if you are not running PPB.</description>
+                            <files>
+                                <folder source="CBPC" destination="" />
+                            </files>
+                            <conditionFlags>
+                                <flag name="touchSystem">CBPC</flag>
+                            </conditionFlags>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+        <!-- ============================================================
+             STEP 2 - PPB ONLY.  How talkative contact is, plus the two
+             features PPB made possible.  Every default = install nothing.
+             ============================================================ -->
+        <installStep name="Contact, Push and Gear">
+            <visible>
+                <flagDependency flag="touchSystem" value="PPB" />
+            </visible>
+            <optionalFileGroups order="Explicit">
+
+                <group name="How talkative is ordinary contact?" type="SelectExactlyOne">
+                    <plugins order="Explicit">
+
+                        <plugin name="Every contact can be spoken (default)">
+                            <description>The full V3.3 behaviour.
+
+A touch that first passes QUIETLY - as an unvoiced thought, or as background context the NPC does not answer - is watched, and if you are still holding it when it reaches its point, it is upgraded into a SPOKEN reaction. That is what makes nearly every deliberate touch eventually earn a spoken line rather than a silent one.
+
+A brush in passing still says nothing. This is about touches you HOLD.
+
+Pick this if you want NPCs to actually respond to being touched.</description>
+                            <typeDescriptor><type name="Recommended" /></typeDescriptor>
+                        </plugin>
+
+                        <plugin name="Subtle contact">
+                            <description>The quieter, older feel.
+
+A contact that goes out quietly STAYS quiet, however long you hold it - it is never upgraded into a spoken reaction.
+
+Contacts that were always loud stay loud: the intimate ladder, a bare breast, the genitals, a kiss, a knockdown, the choke. This option does not silence those.
+
+Pick this if you find NPCs remark on too much, or you want touch to be mostly felt rather than spoken about.</description>
+                            <files>
+                                <folder source="Subtle Contact" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                    </plugins>
+                </group>
+
+                <group name="Push, shove and leg sweep" type="SelectExactlyOne">
+                    <plugins order="Explicit">
+
+                        <plugin name="Narrate pushes (default)">
+                            <description>PPB lets you physically push NPCs - a steady push that walks them back, a harder shove, a shove that stumbles them to the ground, and a leg sweep that takes them down.
+
+With this on, each of those is reported to SkyrimNet, and the hand that did it is named ("with his right palm"). A push that stumbles and then falls is reported as ONE event, not three.
+
+Pushing an NPC over is something she should notice.</description>
+                            <typeDescriptor><type name="Recommended" /></typeDescriptor>
+                        </plugin>
+
+                        <plugin name="Do not narrate pushes">
+                            <description>VRTouchEvents says nothing about pushes, shoves, stumbles or leg sweeps.
+
+THIS DOES NOT DISABLE PUSHING. Pushing NPCs is PPB's mechanic, not this mod's - PPB still detects it and still physically moves the NPC. Only the narration stops.
+
+One side effect: with pushes narrated, the pushing hand is consumed as the "how" of the push so you get one line. With this option the hand is left alone, so it narrates as an ordinary touch instead.
+
+Pick this if you shove past NPCs a lot while moving and do not want it commented on.</description>
+                            <files>
+                                <folder source="No Push Reactions" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                    </plugins>
+                </group>
+
+                <group name="Equip / unequip awareness" type="SelectExactlyOne">
+                    <plugins order="Explicit">
+
+                        <plugin name="Narrate gear changes (default)">
+                            <description>Put a piece of gear on an NPC by hand, or pull one off, and she knows about it.
+
+- Equipping: "Telord gently put Hide Boots on the feet of Carmella." The wording reflects how hard you pressed it on.
+- Removing: "Telord pulled Hide Boots off Carmella." Stripping her main body slot is treated as a significant moment and can end "...leaving Carmella naked."
+- Refused: a piece that will not go on, or a locked piece that will not come off, reaches her as awareness rather than silence.
+
+Covers every piece - ordinary armour and clothing, ZaZ, Diary of Mine and Devious Devices alike. If you run the DD SN Database / AddOn it adds the device-specific detail (mechanism, lock, who saw it) on top; that is its own lane and this option does not control it.
+
+*** COMPATIBILITY: GIFT BY HAND VR ***
+Equipping by hand means HOLDING a piece of gear up to an NPC. Gift by Hand VR treats an item held out to an NPC as a GIFT and can absorb it into her inventory before the equip gesture finishes - so the gear disappears instead of being worn. If you run Gift by Hand and see that happen, either pick the other option here or unbind Gift by Hand's give gesture. Touch, grab, kiss, push and choke are unaffected either way.</description>
+                            <typeDescriptor><type name="Recommended" /></typeDescriptor>
+                        </plugin>
+
+                        <plugin name="Do not narrate gear changes">
+                            <description>VRTouchEvents says nothing about gear being put on or taken off by hand, and nothing when a piece refuses to go on or a locked piece refuses to come off.
+
+The quiet machinery stays: gripping a garment with both hands to pull it off still does not produce a phantom grope line, and armour held in your hand is still not narrated as a touch. This removes the LINES, not the good behaviour around them.
+
+PICK THIS IF YOU RUN GIFT BY HAND VR and find held gear being absorbed as a gift instead of equipped.</description>
+                            <files>
+                                <folder source="No Gear Awareness" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                    </plugins>
+                </group>
+
+            </optionalFileGroups>
+        </installStep>
+
+        <!-- ============================================================
+             STEP 3 - shared extras.  Arousal and the scene patches are
+             stubbed OFF in both bases; ticking installs the real gate.
+             ============================================================ -->
+        <installStep name="Optional Features">
+            <optionalFileGroups order="Explicit">
+
+                <group name="Arousal and Facial Reactions" type="SelectAny">
+                    <plugins order="Explicit">
+                        <plugin name="Enable Arousal + Facial Reactions">
+                            <description>Adds an LLM-driven arousal + facial-expression layer on top of touch and grab reactions.
+
+When you touch or grab an NPC, VRTouchEvents asks SkyrimNet to decide how that NPC's arousal should shift - adjusted by their personality and their relationship to you (it can go UP for a welcome touch or DOWN for an unwanted one) - and sets a matching facial expression. The arousal change is written to your arousal framework.
+
+COSTS TOKENS: this sends ONE extra LLM prompt to SkyrimNet per qualifying touch/grab, so it adds up over a long session. Leave it OFF to conserve tokens - everything else works fully without it.
+
+REQUIRES (all three): OSL Aroused Reborn (or SexLab Aroused) + SeverActions + Mfg Fix NG. If any are missing the feature simply stays dormant, so it is safe to enable without them - it just will not do anything until they are present.
+
+If unchecked, arousal is fully disabled (no extra prompts, zero token cost).</description>
+                            <files>
+                                <folder source="Arousal" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+
+                <group name="Scene Suppression (prevents lag during SexLab / OStim scenes)" type="SelectAny">
+                    <plugins order="Explicit">
+
+                        <plugin name="SexLab patch">
+                            <description>Turns VRTouchEvents OFF for the duration of a SexLab scene (player or target NPC) and re-arms when the scene ends.
+
+STRONGLY RECOMMENDED if you use SexLab. Without it the constant body contact during a scene keeps VRTouchEvents firing on every collision, which causes the lag, stutter and freezes some users report during scenes - and can desync the animation.
+
+REQUIRES: SexLab installed. Safe to leave installed if SexLab is later removed - the check simply returns false.</description>
+                            <files>
+                                <folder source="SexLab Patch" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                        <plugin name="OStim patch">
+                            <description>Turns VRTouchEvents OFF for the duration of an OStim scene (player or target NPC) and re-arms when the scene ends.
+
+STRONGLY RECOMMENDED if you use OStim. Without it the constant body contact during a scene keeps VRTouchEvents firing on every collision, which causes lag, stutter and freezes - and can desync the animation.
+
+REQUIRES: OStim Standalone installed. Safe to leave installed if OStim is later removed.
+
+NOTE for the PPB build: hand equip and unequip are deliberately still narrated during a scene, because pulling equipment off someone mid-scene is worth reporting.</description>
+                            <files>
+                                <folder source="OStim Patch" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+
+                    </plugins>
+                </group>
+
+                <group name="Follower Handling" type="SelectAny">
+                    <plugins order="Explicit">
+                        <plugin name="No Follower Grab">
+                            <description>Stops VRTouchEvents from reacting when you GRAB one of your active followers.
+
+Grab a follower to reposition them with HIGGS and they stay silent - no SkyrimNet line, and no choke is started on them. Touching and petting followers still works, and non-followers are unaffected. Dismissed followers react to grabs normally again.
+
+Affects ONLY the grab path - touch reactions and HIGGS's own physical grab are untouched.</description>
+                            <files>
+                                <folder source="No Follower Grab" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+
+            </optionalFileGroups>
+        </installStep>
+
+        <!-- ============================================================
+             STEP 4 - CBPC ONLY.  The PPB build ships no skeleton at all.
+             ============================================================ -->
+        <installStep name="Body Physics Compatibility">
+            <visible>
+                <flagDependency flag="touchSystem" value="CBPC" />
+            </visible>
+            <optionalFileGroups order="Explicit">
+                <group name="Body Physics Compatibility" type="SelectAny">
+                    <plugins order="Explicit">
+                        <plugin name="SOFTBODY skeleton patch">
+                            <description>ONLY for users of the SOFTBODY mod ("SOFTBODY - More perfect physical collision of the body", standard GT-Softbody v3.26).
+
+The CBPC build ships a generic skeleton carrying its touch-detection nodes (CME Face/Back). That generic skeleton would OVERRIDE SOFTBODY's skeleton and drop SOFTBODY's own bones (breast/sternum SmpBrs + vagina deformation), breaking its physics. This option instead installs SOFTBODY's OWN female skeletons with the detection nodes grafted on - a verified superset (every SOFTBODY bone at the IDENTICAL position/rotation/scale, only CME Face/Back added). Installs after the base so it correctly overrides the generic skeleton. Female skeletons only.
+
+DO NOT tick this if you do NOT use SOFTBODY - it would drop biceps/calf bones a normal body needs. DO NOT use it with the heavier "SoftbodyUltra" / "Softbody UBE Max" variants (different bone set - ask for a patch built from your variant).</description>
+                            <files>
+                                <folder source="SOFTBODY Skeleton" destination="" />
+                            </files>
+                            <typeDescriptor><type name="Optional" /></typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+            </optionalFileGroups>
+        </installStep>
+
+    </installSteps>
+
+</config>

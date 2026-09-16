@@ -1,6 +1,9 @@
 #include "PCH.h"
 #include "CBPCHook.h"
 #include "PpbBridge.h"
+#include "SkyrimNetReplies.h"
+#include "PromptState.h"
+#include "Speech.h"
 
 namespace logger = SKSE::log;
 
@@ -58,11 +61,25 @@ static void OnSKSEMessage(SKSE::MessagingInterface::Message* msg)
                      "arming the hit sink + PPB bridge.");
         CBPCHook::InstallHitSink();
         PpbBridge::Install();
+        // ★ 2026-09-12 (third design): the choke / recovery / wake prompt blocks are GATED by a
+        // marker faction the prompts read with SkyrimNet's built-in get_faction_rank; this only
+        // counts the NPC's spoken replies to end the recovery / wake blocks. SkyrimNetReplies.h
+        // records why the two decorator designs before it failed.
+        SNReplies::Install();
+        // ★ 2026-09-12 (fourth design): the prompt blocks now read a live state FILE with SkyrimNet's
+        // read_json, which re-reads on every modification - see PromptState.h for why nothing else worked.
+        PromptState::Install();
+        // ★ 2026-09-15: who is talking in SkyrimNet - an interrupt cuts only the NPC the line is about (Speech.h).
+        Speech::Install();
         break;
     case SKSE::MessagingInterface::kPreLoadGame:
     case SKSE::MessagingInterface::kNewGame:
         // The ledger rule: touch sessions never survive a load boundary.
         PpbBridge::Reset();
+        // ...and neither does a choke, so neither does its reply counting or its prompt state.
+        SNReplies::Reset();
+        PromptState::Reset();
+        Speech::Reset();
         break;
     default:
         break;
@@ -80,6 +97,21 @@ static void OnSKSEMessage(SKSE::MessagingInterface::Message* msg)
 // have left the coalescer sweeping at 4 Hz for nobody. It now pauses the PPB
 // bridge, which is the thing that actually costs something.
 //
+// ★ 2026-09-15: VRTouchEvents_Native.IsTalking(Actor) - SkyrimNet's speaker right now (Speech.h). Logged on every call,
+// with the rule that answered, so a VR run shows why a line was or was not cut.
+static bool Papyrus_IsTalking(RE::StaticFunctionTag*, RE::Actor* a)
+{
+    if (!a) {
+        return false;
+    }
+    const char* why = nullptr;
+    const bool  yes = Speech::IsTalking(a->GetFormID(), &why);
+    const char* nm  = a->GetName();
+    logger::info("[SPEECH] IsTalking 0x{:08X} '{}' -> {} ({})", a->GetFormID(), nm ? nm : "", yes ? "yes" : "no",
+                 why ? why : "");
+    return yes;
+}
+
 // Free function (NOT a lambda): CommonLib's RegisterFunction needs a function
 // pointer — RE::NativeFunction<lambda> is undefined.
 static void Papyrus_SetScenePaused(RE::StaticFunctionTag*, bool paused)
@@ -96,20 +128,81 @@ static bool Papyrus_WasHitRecently(RE::StaticFunctionTag*, RE::Actor* a, float w
 }
 
 // ★ MALE UPDATE (2026-08-23): last erection level PPB reported for this actor,
-// -1 = unknown (today: always, until PPB ships the reserved-tail byte the
+// -1 = unknown. ★ CORRECTED 2026-09-02: PPB SHIPS THE BYTE and this returns real
+// levels — the old text said "today: always [-1]" and was three PPB releases stale.
+// (Kept for the genuine unknowns: female, no GEN rig, or an older PPB. The
 // handoff request asks for — the narration omits the erection clause on -1).
 static std::int32_t Papyrus_GetErectionLevel(RE::StaticFunctionTag*, RE::Actor* a)
 {
     return a ? PpbBridge::GetErectionLevel(a->GetFormID()) : -1;
 }
 
+// ★ 2026-09-12: count this NPC's next 'replies' spoken lines through SkyrimNet's "dialogue"
+// event, then send VRTE_RepliesDone (sender = the NPC). <= 0 stops counting.
+static void Papyrus_CountReplies(RE::StaticFunctionTag*, RE::Actor* a, std::int32_t replies)
+{
+    if (a) {
+        SNReplies::Count(a->GetFormID(), replies);
+    }
+}
+
+// ★ 2026-09-12: a FormID as an UNSIGNED decimal string. Papyrus's GetFormID() is a signed Int,
+// so any form from load slot 0x80 or higher (e.g. Sofia, 0xDC001827) comes out NEGATIVE - and a
+// JSON context built from it would hand SkyrimNet's formid_to_uuid() a negative number. The
+// arousal query's context uses this.
+static RE::BSFixedString Papyrus_FormIDDec(RE::StaticFunctionTag*, RE::TESForm* f)
+{
+    return f ? RE::BSFixedString(std::to_string(f->GetFormID()).c_str()) : RE::BSFixedString("");
+}
+
+// ★ 2026-09-12 (fourth design): publish an NPC's prompt state (0 off · 1 choked · 2 moderate ·
+// 3 severe · 4 just woke) to Data/SKSE/Plugins/VRTouchEvents/prompt_state.json, immediately.
+// 0796 / 0797 / 0798 read it with read_json. Call BEFORE the narration that follows a change.
+static void Papyrus_SetPromptState(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString displayName,
+                                   std::int32_t state)
+{
+    if (a) {
+        PromptState::Set(a->GetFormID(), displayName.c_str() ? displayName.c_str() : "", state);
+    }
+}
+
+// ★ 2026-09-13: the contact that made a PPB push reaction (her head/belly/chest/back/thigh/pelvis for
+// push/shove/dropped, her legs for sweeped), taken out of touch narration for 5 s so the push line carries it.
+// "" = none found.
+// ⚠ Registered WITHOUT the tasklet flag on purpose: the VM runs it on the main thread, like the bridge.
+static RE::BSFixedString Papyrus_TakePushContact(RE::StaticFunctionTag*, RE::Actor* a, RE::BSFixedString kind,
+                                                 RE::BSFixedString wand)
+{
+    if (!a) {
+        return RE::BSFixedString("");
+    }
+    const std::string out = PpbBridge::TakePushContact(a->GetFormID(), kind.c_str() ? kind.c_str() : "",
+                                                       wand.c_str() ? wand.c_str() : "");
+    return RE::BSFixedString(out.c_str());
+}
+
+// ★ 2026-09-13: a two-hand undress is running on this NPC - both hand lanes stay out of touch narration for `secs`.
+// ⚠ No tasklet flag, same as TakePushContact.
+static void Papyrus_TakeGestureLanes(RE::StaticFunctionTag*, RE::Actor* a, float secs)
+{
+    if (a) {
+        PpbBridge::TakeGestureLanes(a->GetFormID(), static_cast<double>(secs));
+    }
+}
+
 static bool RegisterPapyrusFuncs(RE::BSScript::IVirtualMachine* vm)
 {
+    vm->RegisterFunction("TakePushContact", "VRTouchEvents_Native", Papyrus_TakePushContact);
+    vm->RegisterFunction("TakeGestureLanes", "VRTouchEvents_Native", Papyrus_TakeGestureLanes);
+    vm->RegisterFunction("SetPromptState", "VRTouchEvents_Native", Papyrus_SetPromptState);
     vm->RegisterFunction("SetScenePaused", "VRTouchEvents_Native", Papyrus_SetScenePaused);
     vm->RegisterFunction("WasHitRecently", "VRTouchEvents_Native", Papyrus_WasHitRecently);
     vm->RegisterFunction("GetErectionLevel", "VRTouchEvents_Native", Papyrus_GetErectionLevel);
-    logger::info("Registered Papyrus natives VRTouchEvents_Native.SetScenePaused / WasHitRecently"
-                 " / GetErectionLevel.");
+    vm->RegisterFunction("CountReplies", "VRTouchEvents_Native", Papyrus_CountReplies);
+    vm->RegisterFunction("FormIDDec", "VRTouchEvents_Native", Papyrus_FormIDDec);
+    vm->RegisterFunction("IsTalking", "VRTouchEvents_Native", Papyrus_IsTalking);
+    logger::info("Registered Papyrus natives VRTouchEvents_Native.TakePushContact / TakeGestureLanes / SetScenePaused / WasHitRecently"
+                 " / GetErectionLevel / CountReplies / FormIDDec / SetPromptState.");
     return true;
 }
 

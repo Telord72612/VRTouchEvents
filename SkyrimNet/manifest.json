@@ -1,0 +1,24 @@
+{
+  "id": "telord.vrtouchevents",
+  "type": "bundle",
+  "title": "VRTouchEvents",
+  "tagline": "Arousal, facial reactions and choke awareness for VRTouchEvents.",
+  "description": "The arousal and facial-reaction prompt for VRTouchEvents. VRTouchEvents sends it one touch in neutral words and the LLM answers with an arousal delta and an expression, so the reaction comes from the character rather than from a table.",
+  "author": "Telord",
+  "tags": [
+    "vr",
+    "touch",
+    "arousal"
+  ],
+  "nsfw": true,
+  "icon": "sparkles",
+  "version": "3.3.3",
+  "min_skyrimnet_version": "0.25.0",
+  "mods": [
+    {
+      "name": "VRTouchEvents",
+      "file": "VRTouchEvents.esp",
+      "required": true
+    }
+  ]
+}

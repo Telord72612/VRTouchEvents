@@ -1,0 +1,78 @@
+{#
+  VRTouchEvents - THE CHOKE BLOCK.                  (2026-09-12, the user's design)
+
+  Up from the moment a choke LANDS - three seconds of held throat - until release
+  or passout. Modelled on the DD AddOn's gag block (0795), which works: a hard
+  speech constraint delivered as a final instruction on EVERY render, rather than
+  as one event that ages out of view.
+
+  The user's stages:
+    0-1s   grace, nothing
+    1-3s   a grab on the throat - release here is an ordinary short release line
+    3s     interrupt + narration, and THIS block comes up
+    3-7s   release -> 0797 recovery, 2 renders
+    7s     short-lived event + thought for everyone in view
+    7-15s  release -> 0797 recovery, 3 renders, severe
+    15s    passout; this block goes down with her
+
+  ★ THE STANDING RULE FOR THIS FOLDER (user, 2026-09-08): ENFORCE, DO NOT NEGATE.
+    Say what IS true about the body and the output, never what must be avoided -
+    a prohibition still describes the forbidden thing, and the model imitates what
+    it has just read. The user's draft "you can't break free and are unable to
+    breathe" becomes "the grip holds firm against everything she does" and "air
+    stops at the grip".
+    ⚠ No "do not / never / cannot / can not / no longer" in the RENDERED prose
+    below. Comments are exempt. Re-run the check before shipping any edit.
+
+  ⚠ (The old isString(x) and x != "" gate belonged to the decorator designs. A faction rank
+    is a real number: a non-member reads below 0, so == 1 is exact.)
+
+  ⚠ render_mode guard: a choke stops SPEECH, not thought. Her inner monologue
+    stays free - which is exactly when she has the most to say.
+
+  Numbering: 0796 sits directly after the gag (0795) and before SkyrimNet's
+  0800_direct_narration - the same slot that is proven to work for the gag.
+
+  ★★★★ THE GATE IS A LIVE STATE FILE (2026-09-12, fourth design - the user's placeholder idea).
+  VRTouchEvents.dll writes Data/SKSE/Plugins/VRTouchEvents/prompt_state.json the instant a
+  choke lands (state 1), BEFORE the narration; this reads it with SkyrimNet's read_json, which
+  compares the file's modified time on EVERY call and re-reads on a change - so the block is
+  current on the very next render. The entry is matched on the SkyrimNet entity UUID, which is
+  exactly npc.UUID. Every NPC-data path SkyrimNet has was measured lagging first:
+       v1 Papyrus decorator: refreshed 2-3 s AFTER each render - a turn late (2 of 5 right)
+       v2 C++ decorator: called live, but the answer reused per NPC for ~30 s - never reached the LLM
+       v3 faction rank (get_faction_rank): SkyrimNet's per-NPC game data reused ~20 s after its last
+          read - Yamarz (last rendered 21.5 s before) got the block, Carmella (3-20 s) did not
+  ⚠ A user_final_instructions FILE is not change-checked (loaded once), so the text itself cannot be
+    swapped live - the data it reads can.
+  The choker is always the player, so the name is player.name - no decorator at all.
+  ⛔ NEVER PIPE A FILTER STRAIGHT OFF A CALL. Upper-casing decnpc(npc.UUID).name directly
+     printed the raw expression into her prompt ("rendered with 2 missing variable(s)"). Set
+     the value into a variable first, then filter the variable - upper on a set variable
+     (_pp in the gag's heading) is the proven form.
+  ★★★★★ THE CACHE-BUST (2026-09-13, VR test 5 + the user). SkyrimNet caches EVERY template call by name + argument
+  value (55 s default, 30 s from a voice key press), so a plain read_json of this file was served stale on 2 of 7
+  renders - the modified-time check inside read_json never runs on a cache hit. The second argument is three
+  fresh random values (random is never cached): a number, so read_json ignores it and returns the whole file
+  (SkyrimNet.dll 0x697500 - a path is used only when that argument is a string), but it is part of the cache key,
+  so nearly every render is a new key and a real read. VERIFIED LIVE 2026-09-13 20:45 (VR test 8, report 45): the DLL wrote the state, the
+  render 189 ms later logged 'File modified since cached, reloading' and this block was in that prompt; 22 of 22
+  renders in the session ran the read (0 served stale by the callback cache).
+  To revert: drop the second argument.
+#}
+{% if render_mode != "thoughts" and exists("npc") and existsIn(npc, "UUID") %}
+{% set _vs = read_json("VRTouchEvents/prompt_state", random * 10000 + random * 100 + random) %}
+{% set _vc_state = 0 %}
+{% if isObject(_vs) and existsIn(_vs, "npcs") %}{% for _ve in _vs.npcs %}{% if _ve.uuid == npc.UUID %}{% set _vc_state = _ve.state %}{% endif %}{% endfor %}{% endif %}
+{% if _vc_state == 1 %}
+{% set _vc_by = player.name %}
+{% set _p = "he" %}{% set _pp = "his" %}{% set _po = "him" %}
+{% if decnpc(npc.UUID).isFemale %}{% set _p = "she" %}{% set _pp = "her" %}{% set _po = "her" %}{% endif %}
+{% set _vc_name = decnpc(npc.UUID).name %}
+**BEING CHOKED - {{ _vc_name | upper }}'S THROAT IS HELD SHUT.** {{ _vc_by }}'s hand is clamped tight around {{ _pp }} throat right now and holds it closed. Air stops at the grip.
+
+EVERY sound {{ _p }} makes is a choked, strangled noise: gagging, a strangled wheeze, a rasp that dies in the throat. Tone and struggle carry {{ _pp }} whole meaning.
+
+The grip holds firm against everything {{ _p }} does, and it stays exactly this tight until {{ _vc_by }} lets go.
+{% endif %}
+{% endif %}
