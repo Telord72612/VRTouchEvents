@@ -1,0 +1,59 @@
+{#
+  VRTouchEvents - JUST CAME TO.                     (2026-09-12, the user's design)
+
+  A choke that reaches 15 s knocks her out, and VRTE's KO slot wakes her later - a heal
+  (potion, spell) or the 2-4 game-hour timer. Nothing else ever tells SkyrimNet she is
+  conscious again: the last thing in her history is the passout. Measured 2026-09-12 -
+  every reply after a wake was still "Carmella is unconscious.", even while she was being
+  choked again. This block is the missing "she woke up".
+
+  The user's wording: "(NPC's name) just woke up from being unconscious, they are slightly
+  disoriented at first and are trying to regain their senses" - so the NPC acts like
+  someone who was just out cold.
+
+  ★★★★ THE GATE IS THE LIVE STATE FILE (2026-09-12, fourth design - see 0796): read_json of
+  VRTouchEvents/prompt_state, state 4, written by VRTouchEvents.dll the moment she wakes; it comes off after her 2 SPOKEN replies (counted by
+  VRTouchEvents.dll from SkyrimNet's "dialogue" event) or after 60 s, whichever first.
+  ⛔ The 60 s limit is the fix for VR test 2: the C++-decorator version first showed this block
+  2 m 45 s after Carmella woke, while another NPC was being choked, and she played it as waking
+  right then. Being choked again sets rank 1, so this block and 0796 never render together.
+
+  ★ ENFORCE, DO NOT NEGATE (user, 2026-09-08): no "do not / never / cannot / can not /
+    no longer" in the rendered prose. Comments are exempt.
+  ★ FACTUAL: the state of the body and the senses. How she takes it follows from who she is.
+  ★ Names or he/she (from decnpc), never they/their.
+  ⚠ A faction rank is a real number (a non-member reads below 0) - no isString guard needed.
+  ⚠ Set the name into a variable before upper-casing it - see 0796's note.
+
+  Renders in EVERY mode, thoughts included: a mind coming back online is exactly what her
+  inner monologue should carry. (0796 skips thoughts because a choke stops speech, not thought.)
+
+  Numbering: 0798 follows 0796 / 0797 and sits before SkyrimNet's 0800_direct_narration.
+  ★★★★★ THE CACHE-BUST (2026-09-13, VR test 5 + the user). SkyrimNet caches EVERY template call by name + argument
+  value (55 s default, 30 s from a voice key press), so a plain read_json of this file was served stale on 2 of 7
+  renders - the modified-time check inside read_json never runs on a cache hit. The second argument is three
+  fresh random values (random is never cached): a number, so read_json ignores it and returns the whole file
+  (SkyrimNet.dll 0x697500 - a path is used only when that argument is a string), but it is part of the cache key,
+  so nearly every render is a new key and a real read. VERIFIED LIVE 2026-09-13 20:45 (VR test 8, report 45): the DLL wrote the state, the
+  render 189 ms later logged 'File modified since cached, reloading' and this block was in that prompt; 22 of 22
+  renders in the session ran the read (0 served stale by the callback cache).
+  To revert: drop the second argument.
+  ★ GAG (2026-09-13, fix list 41 V6, the user: "V6 yes"). A GAGGED NPC gets no wake block: its "first words come
+  haltingly" sat against DD SN's 0795 gag block. Same native gate as 0797 (zad_DeviousGag / zbfWornGag / DOMWornGag).
+  Thoughts still render (see above).
+#}
+{% if exists("npc") and existsIn(npc, "UUID") %}
+{% set _vs = read_json("VRTouchEvents/prompt_state", random * 10000 + random * 100 + random) %}
+{% set _vk_state = 0 %}
+{% if isObject(_vs) and existsIn(_vs, "npcs") %}{% for _ve in _vs.npcs %}{% if _ve.uuid == npc.UUID %}{% set _vk_state = _ve.state %}{% endif %}{% endfor %}{% endif %}
+{% if _vk_state == 4 and not worn_has_keyword(npc.UUID, "zad_DeviousGag") and not worn_has_keyword(npc.UUID, "zbfWornGag") and not worn_has_keyword(npc.UUID, "DOMWornGag") %}
+{% set _p = "he" %}{% set _pp = "his" %}{% set _po = "him" %}
+{% if decnpc(npc.UUID).isFemale %}{% set _p = "she" %}{% set _pp = "her" %}{% set _po = "her" %}{% endif %}
+{% set _vk_name = decnpc(npc.UUID).name %}
+**JUST CAME TO - {{ _vk_name | upper }} WAS UNCONSCIOUS MOMENTS AGO.** {{ _vk_name }} has just woken up after being choked unconscious and is only now coming back to {{ _pp }} senses.
+
+The first moments are foggy and slow. {{ _pp | capitalize }} head swims, {{ _pp }} vision takes a moment to sharpen, and {{ _pp }} throat is raw and sore. {{ _p | capitalize }} is slightly disoriented at first, piecing together where {{ _p }} is and what just happened, and {{ _pp }} first words and movements come haltingly while {{ _pp }} senses return.
+
+How {{ _p }} takes what was done to {{ _po }}, and what {{ _p }} says, follows from who {{ _p }} is.
+{% endif %}
+{% endif %}

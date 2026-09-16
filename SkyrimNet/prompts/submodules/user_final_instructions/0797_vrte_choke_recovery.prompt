@@ -1,0 +1,76 @@
+{#
+  VRTouchEvents - AFTER THE CHOKE.                  (2026-09-12, the user's design)
+
+  The choke block (0796) did its job, and now her last few turns are choked noise
+  sitting in the context window - and the model goes on imitating what it sees.
+  VRTE recorded exactly this failure in August, at StartChoke: a "cannot speak"
+  event "lingered in her context and swallowed the RELEASE reaction too, leaving
+  her silent even after letting go." Withdrawing a constraint does not delete the
+  turns it already produced, so the release gets its own block for as long as
+  those turns are still in view:
+
+      moderate   a 3-7s choke    2 renders
+      severe     a 7-15s choke   3 renders - the body came close to giving out
+
+  A 1-3s squeeze never raised the choke block, so it needs no recovery.
+
+  ★★★★ THE GATE IS THE LIVE STATE FILE (2026-09-12, fourth design - see 0796): read_json of
+  VRTouchEvents/prompt_state, state 2 (moderate, a 3-7s choke) or 3 (severe, 7-15s), written by
+  VRTouchEvents.dll at the release BEFORE the release narration, so her reply to it is the first
+  render to carry this block. (The third design gated on get_faction_rank; SkyrimNet's view of a
+  faction lags ~20 s - the block only showed on a reply 20 min later in VR test 4.) It comes off after her 2 / 3 SPOKEN replies - counted by
+  VRTouchEvents.dll from SkyrimNet's "dialogue" event - or after 180 s, whichever first.
+  One faction, one rank: being choked again sets rank 1, so this block and 0796 can never
+  render together.
+
+  ★ ENFORCE, DO NOT NEGATE. This block's whole job is to stop an imitation, so it
+    must never print the thing to imitate. Every line names what IS true.
+  ★ FACTUAL, per the user: the after-state of the BODY only - pain, the lingering
+    press of the fingers, and for severe the near-passout disorientation. How she
+    takes it, and what she says, is the LLM's to play.
+  ⚠ A faction rank is a real number (a non-member reads below 0) - no isString guard needed.
+
+  History: the Papyrus-decorator version never rendered once (its cache entry had expired by
+  her next reply), and the C++-decorator version was reused by SkyrimNet for ~30 s. And both
+  headings set the
+  name into a variable before upper-casing it: filtering decnpc(npc.UUID).name directly printed
+  the raw expression into her prompt.
+  ★★★★★ THE CACHE-BUST (2026-09-13, VR test 5 + the user). SkyrimNet caches EVERY template call by name + argument
+  value (55 s default, 30 s from a voice key press), so a plain read_json of this file was served stale on 2 of 7
+  renders - the modified-time check inside read_json never runs on a cache hit. The second argument is three
+  fresh random values (random is never cached): a number, so read_json ignores it and returns the whole file
+  (SkyrimNet.dll 0x697500 - a path is used only when that argument is a string), but it is part of the cache key,
+  so nearly every render is a new key and a real read. VERIFIED LIVE 2026-09-13 20:45 (VR test 8, report 45): the DLL wrote the state, the
+  render 189 ms later logged 'File modified since cached, reloading' and this block was in that prompt; 22 of 22
+  renders in the session ran the read (0 served stale by the callback cache).
+  To revert: drop the second argument.
+  ★ GAG + THOUGHTS (2026-09-13, fix list 41 V6, the user: "V6 yes"). A GAGGED NPC gets no recovery block: DD SN's
+  0795 tells the LLM every sound she makes is raw voice only, and this block's "every reply from here is spoken aloud,
+  in words" rendered two files later overrode the gag for 2-3 renders. The gate is the same native keyword test as
+  0795 and DD SN's 0791 - zad_DeviousGag, plus ZaZ's zbfWornGag and Diary of Mine's DOMWornGag, which 0795 also
+  renders for through its name decorator. (worn_has_keyword on a keyword a load order lacks reads false - SkyrimNet's
+  own prompts test DD and SLA keywords for every user.) And no render in thoughts: "spoken aloud" is noise there.
+#}
+{% if render_mode != "thoughts" and exists("npc") and existsIn(npc, "UUID") %}
+{% set _vs = read_json("VRTouchEvents/prompt_state", random * 10000 + random * 100 + random) %}
+{% set _vc_rank = 0 %}
+{% if isObject(_vs) and existsIn(_vs, "npcs") %}{% for _ve in _vs.npcs %}{% if _ve.uuid == npc.UUID %}{% set _vc_rank = _ve.state %}{% endif %}{% endfor %}{% endif %}
+{% if (_vc_rank == 2 or _vc_rank == 3) and not worn_has_keyword(npc.UUID, "zad_DeviousGag") and not worn_has_keyword(npc.UUID, "zbfWornGag") and not worn_has_keyword(npc.UUID, "DOMWornGag") %}
+{% set _p = "he" %}{% set _pp = "his" %}{% set _po = "him" %}
+{% if decnpc(npc.UUID).isFemale %}{% set _p = "she" %}{% set _pp = "her" %}{% set _po = "her" %}{% endif %}
+{% set _vc_name = decnpc(npc.UUID).name %}
+{% if _vc_rank == 3 %}
+**THE CHOKE IS OVER - {{ _vc_name | upper }} SPEAKS AGAIN, PULLED BACK FROM THE EDGE OF PASSING OUT.** The hand is off {{ _pp }} throat and {{ _pp }} voice is {{ _pp }} own again, raw and hoarse. Every reply from here is spoken aloud, in words.
+
+{{ _pp | capitalize }} body came within seconds of giving out. The throat is raw and bruised and burns with every breath. {{ _pp | capitalize }} head swims and the edges of {{ _pp }} vision still flicker dark, so {{ _p }} is disoriented and confused, slow to take hold of what is happening around {{ _po }}. The press of fingers still lingers on {{ _pp }} neck.
+
+How {{ _p }} takes what was just done to {{ _po }}, and what {{ _p }} says, follows from who {{ _p }} is.
+{% else %}
+**THE CHOKE IS OVER - {{ _vc_name | upper }} SPEAKS AGAIN.** The hand is off {{ _pp }} throat and {{ _pp }} voice is {{ _pp }} own again, hoarse at first. Every reply from here is spoken aloud, in words.
+
+{{ _pp | capitalize }} throat aches and throbs where the grip crushed it, each breath rasps a little on the way in, and the press of fingers still lingers on {{ _pp }} neck.
+
+How {{ _p }} takes what was just done to {{ _po }}, and what {{ _p }} says, follows from who {{ _p }} is.
+{% endif %}
+{% endif %}
+{% endif %}

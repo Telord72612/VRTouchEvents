@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fomod>
+    <Name>VRTouchEvents V3.3</Name>
+    <Author>VRTouchEvents</Author>
+    <Version>3.3</Version>
+    <Description>VR physical contact bridged to SkyrimNet - touching, grabbing, kissing, pushing, dressing and choking an NPC become LLM-driven reactions in her own voice, decided by where you touched, how, how long, and what she is wearing.
+
+This installer offers TWO different builds, and you pick one on the first page.
+
+PPB (V3.3) - the current mod. Touch is sensed by Precision Physic Bodies, which puts real collision capsules on the body and reports exactly where you touched, with what (finger, palm, fist, grab, weapon, held object), how deep and for how long. V3.3 adds KISSING (including a kiss that travels from the lips to the neck), PUSH / SHOVE / STUMBLE / LEG SWEEP reactions, and EQUIP / UNEQUIP AWARENESS - put gear on an NPC by hand or pull it off and she knows, ordinary armour and Devious Devices alike. Interrupts now cut only the NPC who is actually talking, so you never cut someone else off mid-sentence. Requires PPB, HIGGS and VRIK; does not use CBPC at all.
+
+CBPC (V2.1) - the older build, for players who cannot run PPB. Touch is sensed by CBPC collision spheres. Coarser, and it has no kissing, no pushes, no gear awareness and no Devious Devices handling. This release also removes TAIL contact and BACK contact, which CBPC could no longer support reliably. It needs CBPC, More haptics CBPC VR config (for the full-body collision config), a collision-enabled body and the skeleton it ships.
+
+On the PPB build you can also choose how talkative ordinary contact is (every held touch can earn a spoken reply, or the quieter "subtle" feel), whether pushes are narrated, and whether gear changes are narrated - the last one matters if you use Gift by Hand VR, which can absorb gear you hold out to an NPC before the equip finishes.
+
+Shared options: Arousal + Facial Reactions (opt-in, costs LLM tokens); SexLab and OStim scene-suppression patches (strongly recommended if you use either); and "No Follower Grab". The CBPC build additionally offers the SOFTBODY skeleton patch.
+
+Pairs with the DD SN Database / "SkyrimNet Devious Awareness Base" for device-specific awareness. Database 1.3.1 or newer is needed for VRTouchEvents to name a locked device correctly when a pull is refused.</Description>
+    <Website></Website>
+    <Groups>
+        <element>VR</element>
+        <element>SKSE Plugins</element>
+    </Groups>
+</fomod>
