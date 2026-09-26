@@ -5,7 +5,25 @@ react to being touched.
 
 ---
 
-## ★ NEW IN V3.3
+## ★ NEW IN V3.4 — the SkyrimNet Beta 25 release
+
+**Requires SkyrimNet Beta 25.** The prompts now ship only as a Beta 25 content layer
+(`SKSE/Plugins/SkyrimNet/external/telord.vrtouchevents/`). The old loose prompt files that Beta 24
+read are gone, so on Beta 24 the arousal prompt and the choke / recovery / wake blocks would not
+load. **Still on Beta 24? Stay on V3.3.**
+
+**The CBPC (V2.1) build is retired.** The installer no longer offers it — Precision Physic Bodies is
+the only touch system. V2.1 is still on the [Releases](https://github.com/Telord72612/VRTouchEvents/releases)
+page if you need it.
+
+**Fix: an accented letter in an NPC's name no longer switches off her choke, recovery and wake
+awareness.** Skyrim hands names over in its own 8-bit text encoding; one letter like the *ö* in a
+mod-added *Björn* made SkyrimNet reject the mod's whole state file, silently. Names are now converted
+to proper UTF-8 on the way out.
+
+**A simpler installer** — two pages, and every default installs nothing extra.
+
+## New in V3.3
 
 **Kissing.** Lips contact is its own reaction, and a kiss that slides from the lips down to the neck
 is narrated as it travels.
@@ -29,21 +47,13 @@ Older releases are in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## The installer: two builds
+## The installer
 
-The FOMOD's first page picks your touch system, and they are genuinely different mods.
+Touch is sensed by [Precision Physic Bodies](https://www.nexusmods.com/skyrimspecialedition/mods/186100),
+which puts real Havok collision capsules on the body and reports exactly where you touched, with what
+(fingertip, palm, fist, grab, weapon, held object), how deep and for how long.
 
-**PPB (V3.3)** — the current mod, and what everything above describes. Touch is sensed by
-[Precision Physic Bodies](https://www.nexusmods.com/skyrimspecialedition/mods/186100), which puts
-real Havok collision capsules on the body and reports exactly where you touched, with what
-(fingertip, palm, fist, grab, weapon, held object), how deep and for how long. Does not use CBPC at
-all.
-
-**CBPC (V2.1)** — the older build, for players who cannot run PPB. Coarser detection, and it has no
-kissing, no pushes, no gear awareness and no Devious Devices handling. Tail and back contact were
-removed in this release — CBPC could not support either reliably.
-
-On the PPB build you then choose:
+The first page chooses:
 
 | option | default | what the other choice does |
 |---|---|---|
@@ -51,14 +61,14 @@ On the PPB build you then choose:
 | **Push reactions** | narrated | silent (PPB still pushes her — only the narration stops) |
 | **Gear awareness** | narrated | silent. **Pick this if you use Gift by Hand VR**, which can absorb gear you hold out to an NPC before the equip finishes |
 
-Shared options: arousal + facial reactions (opt-in, costs LLM tokens), SexLab and OStim
+The second page: arousal + facial reactions (opt-in, costs LLM tokens), SexLab and OStim
 scene-suppression patches, and "No Follower Grab".
 
 ---
 
 ## Requirements
 
-**SkyrimNet** (and all of its own requirements)
+**SkyrimNet Beta 25 or newer** (and all of its own requirements)
 **Precision Physic Bodies** — https://www.nexusmods.com/skyrimspecialedition/mods/186100
 **HIGGS** — https://www.nexusmods.com/skyrimspecialedition/mods/43930
 **VRIK** — https://www.nexusmods.com/skyrimspecialedition/mods/23416
@@ -72,10 +82,6 @@ Same for VRIK, which PPB uses to tell a pointing finger from a fist from an open
 
 Optional, for the arousal + facial expression module: **OSL Aroused Reborn** or **SLA Aroused NG**,
 plus **MFG Fix NG**. Tested with OSL Aroused Reborn.
-
-**The CBPC (V2.1) build instead needs** CBPC, a collision-enabled body (CBBE 3BA or equivalent), and
-**More Haptics CBPC VR config** — that last one is required, because its CBPCollisionConfig additions
-are what give you full-body collision. Without them CBPC only reports breast/belly/butt.
 
 **Coverage is PPB's, not ours.** Mapped races — the human catch-all (which covers elves, orcs and
 most custom races), plus Argonian, Khajiit and Draenei — and both sexes. Children and creatures
@@ -136,8 +142,8 @@ what happened, graded by how long you held. From **7 seconds**, if her relations
 below and someone actually witnessed it, guards are alerted — choking while sneaking raises no alarm
 if you are never detected, and the victim does not count as a witness.
 
-A choked-out NPC stays down for **2 to 4 in-game hours** at 50% health with no regeneration; a
-healing spell or potion wakes her early. **10 unconscious NPCs are tracked at once.**
+A choked-out NPC drops to **25% health** with no regeneration and stays down for **2 to 4 in-game
+hours**; healing her back to 50% (a spell or a potion) wakes her early. **10 unconscious NPCs are tracked at once.**
 
 ---
 
@@ -181,9 +187,8 @@ plugin, and Caprica for the Papyrus, against SkyrimNet, HIGGS, OSL Aroused and M
 | `scripts/*.psc` | Papyrus: the dispatcher, the reaction tables and the narration builder |
 | `scripts/gates/stub/` | the gate version the **Base** install ships |
 | `scripts/gates/patches/` | the version a **FOMOD option installs over it** |
-| `SkyrimNet/prompts/` | the arousal prompt and the choke / recovery / wake blocks |
+| `SkyrimNet/` | the Beta 25 content layer — `manifest.json` + `prompts/` (the arousal prompt and the choke / recovery / wake blocks); installs to `SKSE/Plugins/SkyrimNet/external/telord.vrtouchevents/` |
 | `fomod/` | the installer definition |
-| `legacy-cbpc/scripts/` | the Papyrus for the CBPC (V2.1) build |
 
 ⚠ The two gate folders are about *which install writes the file*, not about polarity. For arousal and
 the scene patches the Base ships a no-op and the option installs the working version. For the three

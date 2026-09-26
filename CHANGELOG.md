@@ -1,5 +1,51 @@
 # Changelog
 
+## V3.4 — 2026-09-25 — the SkyrimNet Beta 25 release
+
+### Requires SkyrimNet Beta 25
+
+The prompts — the arousal prompt and the choke / recovery / wake blocks — now ship **only** as a
+Beta 25 content layer, `SKSE/Plugins/SkyrimNet/external/telord.vrtouchevents/` (manifest `3.4.0`,
+`min_skyrimnet_version 0.25.0`). The loose `SKSE/Plugins/SkyrimNet/prompts/` copies that Beta 24 read
+are removed. On Beta 24 those prompts would not load; stay on V3.3 there.
+
+Removing the loose copies also removes a V3.3 installer bug: the Arousal option shipped its own,
+**older** loose copy of the arousal prompt, and because the installer writes pages in order, ticking
+Arousal on Beta 24 replaced the newer prompt with the older one.
+
+### The CBPC (V2.1) build is retired
+
+The installer's touch-system page and the CBPC-only SOFTBODY skeleton page are gone, along with the
+CBPC build's files, and `legacy-cbpc/` is removed from this repository. Precision Physic Bodies is the
+only touch system. V2.1 remains available as its own release and in git history.
+
+### Fix: a non-UTF-8 NPC name switched off the choke / recovery / wake awareness
+
+`plugin/src/PromptState.cpp` wrote NPC names into `prompt_state.json` byte for byte. Skyrim hands names
+over in its 8-bit codepage (cp1252: *ö* is the single byte `F6`), which is illegal UTF-8, and
+SkyrimNet's JSON parser then rejects the **whole** file — every choke, recovery and wake block went
+dark while that NPC was tracked, with only error spam in `SkyrimNet.log`. Any NPC with an accented
+letter in her display name triggered it (a mod-added *Björn*, a translation, a rename).
+
+The escaper now guarantees UTF-8, per byte sequence: text that is already valid UTF-8 passes
+untouched, a run that is not is converted through the Windows ANSI codepage, and anything that still
+cannot convert becomes U+FFFD, so the file always parses. Names inside the plugin keep the game's own
+bytes. Ported from the same fix in SkyrimNet Devious Awareness Base (build 1.1.9); logged once per
+session when a name is converted.
+
+### The installer
+
+Two pages: *Contact, Push and Gear*, then *Optional Features*. The base is always installed and every
+option overrides one of its gate scripts at a higher priority, so an option wins by rule rather than
+by file order. Every default still installs nothing extra — a manual install keeps every feature.
+
+### Testing
+
+⚠ **Code-verified, not yet VR-tested.** The DLL was rebuilt with only `PromptState.cpp` changed,
+string-scanned, and confirmed identical to the one packaged. The package passed the installer checks:
+both XML files parse from inside the zip, every folder referenced, stub-gate polarity, the content
+layer's rules, and a leak scan.
+
 ## V3.3 — 2026-09-15
 
 ### Kissing
